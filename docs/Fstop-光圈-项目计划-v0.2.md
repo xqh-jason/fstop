@@ -1,7 +1,7 @@
 # Fstop · 光圈 — 项目计划 v0.2
 
 > 项目代号：**Fstop**（中文名：**光圈**）
-> 创建日期：2026-09-23 ｜ v0.2 同日修订
+> 创建日期：2026-09-23 ｜ v0.2 同日修订 ｜ 补充定稿：四项工具链决策（见 §7.1、§7.6）
 > v0.1 → v0.2 的依据：对浏览器能力（BCD）、模型体积与许可（HF）、存储语义（SQLite WASM 文档）、同类项目现状（GitHub）做了一轮实测核对。原文中三处前提被证伪，已在本文中修正；所有可核事实见附录 A。
 
 ## 变更摘要（相对 v0.1）
@@ -135,6 +135,8 @@ Fstop 的答案：**能力在本地，文件原地不动，一个字节不外发
 |---|---|---|
 | 应用框架 | Vue 3 + Vite + TypeScript | Vue 3.5+ / Vite 8+ |
 | 包管理与脚本 | pnpm | 11+ |
+| 样式 | 原生 CSS + CSS 变量（不引 UI 框架） | — |
+| 状态管理 | 不引 Pinia：`src/core/` 索引状态机是唯一真相源，UI 用薄 composable 订阅 | — |
 | 推理运行时 | `@huggingface/transformers`（WebGPU 后端） | 4.3+ |
 | 模型执行 | `onnxruntime-web` | 1.30+ |
 | 本地数据库 | `@sqlite.org/sqlite-wasm` | 3.53+ |
@@ -144,6 +146,7 @@ Fstop 的答案：**能力在本地，文件原地不动，一个字节不外发
 | 持久化存储 | OPFS（`opfs-sahpool` VFS）+ Cache Storage + IndexedDB | 浏览器原生 |
 | 单元测试 | Vitest | 最新 |
 | 端到端测试 | Playwright | 最新 |
+| 代码质量 | ESLint（flat config）+ Prettier + `vue-tsc --noEmit` | 最新 |
 
 **已删除 `sqlite-vec`**：npm 上的 `sqlite-vec@0.1.9` 只发布 `index.cjs`（1.5 KB）/ `index.mjs`（1.6 KB）/ `index.d.ts` / `package.json` 四个文件，`index.mjs` 的唯一逻辑是 `db.loadExtension(<原生 .dylib/.so/.dll 路径>)`，按 darwin / linux / win32 的 x64 / arm64 解析——**不含 wasm**。浏览器要用它必须自行获取或编译 `vec0.wasm`，属于额外构建风险。而 1 万条 512 维向量的余弦排序约 10 MFLOP，10 万条约 100 MFLOP，在 Worker 内遍历扁平数组是**毫秒级**。这一层不是本项目的技术风险点，自实现更少依赖、更可读。
 
@@ -271,6 +274,7 @@ interface EmbeddingProvider {
 2. **删除 `index_runs.cursor`**。任务队列完全可由 `SELECT ... WHERE status='pending' LIMIT n` 派生，崩溃后天然续算；游标的语义与一致性维护都是纯成本。**不允许存在内存态的隐式进度。**
 3. **新增 `content_hash`**（`size` + 首尾 64 KB 哈希）。v0.1 的「mtime + size」在从备份恢复、跨盘复制后会让 mtime 全变 → 整库重算；重命名目录只改 `rel_path` → 也全废。内容身份让移动/重命名不触发重算。
 4. **新增 `deleted_at` / `ext` / `exif_orientation` / `schema_version`**。增量扫描发现文件消失时必须标记；EXIF 方向必须在生成缩略图与向量**之前**应用，否则两者都是错的。
+5. **迁移：手写 `migrations/` 数组 + `meta.schema_version`，不引 ORM。** 七张表的结构，ORM 只会把 SQL 藏起来；迁移按版本号顺序执行、必须可重放，启动时校验数据库版本与代码期望版本一致，不一致则拒绝打开并提示。
 
 ### 7.7 通信
 
@@ -400,7 +404,7 @@ fstop/
 │   ├── app/                应用装配与路由
 │   ├── core/               ★ 手写区：数据模型 / 索引状态机 / 任务队列 / 两个接口
 │   ├── workers/            推理 Worker（embed 单实例）
-│   ├── storage/            OPFS、sqlite、模型缓存
+│   ├── storage/            OPFS、sqlite（opfs-sahpool VFS）、迁移、模型缓存
 │   ├── ui/                 视图与组件
 │   └── shared/             工具与类型
 ├── bench/                  可复现基准 + 合成语料生成器
