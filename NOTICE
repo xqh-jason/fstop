@@ -1,0 +1,55 @@
+NOTICE
+======
+
+Fstop 本身以 MIT 许可发布，见 `LICENSE`。
+
+本文件记录本项目**实际引用或可能下载**的全部第三方资产的来源、许可与是否随仓库分发。
+凡是本文件未列出的第三方资产，不得在本项目中出现（包括脚本、样例图片与前端资源）。
+
+## 1. 模型权重：一律不随仓库分发
+
+仓库内**不存放任何模型权重**。`public/models/` 只允许存放清单（model id / 文件名 / 体积 / 校验值），
+权重由 §4 的脚本在用户机器上拉取。这样「除模型权重外零出站请求」是结构上成立的，而不是措辞上的。
+
+| 资产 | 来源 | 许可 | 本仓库是否分发 |
+|---|---|---|---|
+| Chinese-CLIP 代码 | `OFA-Sys/Chinese-CLIP` | MIT | 否（不引用其代码） |
+| `OFA-Sys/chinese-clip-vit-base-patch16` 权重 | Hugging Face | 模型卡**无 `license` 字段**（同门 `chinese-clip-rn50` 标 `apache-2.0`） | **否**，仅提供下载与校验脚本 |
+| `Xenova/chinese-clip-vit-base-patch16`（ONNX） | Hugging Face | 同源，无许可标签 | **否**，同上 |
+| `openai/clip-vit-base-patch32` | Hugging Face | MIT | **否**，同上 |
+| `Xenova/clip-vit-base-patch32`（ONNX） | Hugging Face | MIT | **否**，同上 |
+
+**默认模型的许可结论**：Chinese-CLIP 权重未明示许可 → 不再分发，只提供脚本与校验值。
+使用者自行下载的行为，其合规性由使用者与其所在司法辖区决定；本项目不对权重做任何再分发声明。
+
+## 2. 人脸模型（M2 / P1，尚未接入）
+
+| 资产 | 来源 | 许可 | 本仓库是否分发 |
+|---|---|---|---|
+| `immich-app/scrfd_34g_gnkps`（人脸检测） | Hugging Face | MIT | 否，仅脚本 |
+| `immich-app/antelopev2`（人脸识别，insightface 系） | Hugging Face | **`license: other`（非商用研究用途）** | 否，仅脚本 |
+
+> **`antelopev2` 的非商用条款会约束整个产品**：一旦接入，本项目不得转商用。
+> 该限制必须在 README 与界面中同步告知。
+
+## 3. 运行时依赖
+
+| 依赖 | 许可 |
+|---|---|
+| `@huggingface/transformers` | Apache-2.0 |
+| `onnxruntime-web` | MIT |
+| `@sqlite.org/sqlite-wasm` | Apache-2.0 / 见其仓库 |
+| `comlink` | Apache-2.0 |
+| Vue / Vite / Vitest / ESLint / Prettier | MIT |
+
+> 依赖尚未引入，接入时逐个核对并在此表补全实际版本与许可文件路径。
+
+## 4. 校验值
+
+**当前仓库未声明任何权重校验值**，因为尚未拉取过权重。M0 的 `scripts/fetch-models` 落地时，
+本文件必须为每个权重文件补上 `sha256`，并与 `public/models/` 中的清单保持一致。
+在此之前，任何「权重已被校验」的说法都不成立。
+
+---
+
+本文件是 DoD 的一部分：`NOTICE` 必须与实际使用的权重一致（见 docs 项目计划 §十二）。
