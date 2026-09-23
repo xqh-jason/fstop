@@ -14,3 +14,9 @@ coverage/
 test-results/
 playwright-report/
 blob-report/
+
+# 本地权重缓存（仓库不分发权重，见 NOTICE）
+.cache/
+# 基准产物与本地夹具（HEIC 真机样张等，不入库）
+bench/results/
+bench/fixtures/

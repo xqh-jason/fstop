@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fstop · M0 探针</title>
+    <style>
+      body {
+        background: #0e0e11;
+        color: #ececf1;
+        font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        margin: 0;
+        padding: 24px;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .ok {
+        color: #57d98a;
+      }
+      .bad {
+        color: #ff7a45;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>M0 探针</h1>
+    <p>结果写入 <code>window.__PROBE_RESULT</code>，并实时渲染到下方。</p>
+    <pre id="out">running…</pre>
+    <script type="module" src="/bench/probe.ts"></script>
+  </body>
+</html>

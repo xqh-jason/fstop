@@ -1,2 +1,7 @@
+# pnpm 11 起，原来的 package.json "pnpm" 字段迁移到这里
+# 依赖的构建脚本一律禁止执行：onnxruntime-node 是 ort 的 Node 后端（本项目推理只在浏览器里跑），
+# protobufjs 的 postinstall 同样不需要。要放行某个包，就在这里列出它。
+onlyBuiltDependencies: []
+
 minimumReleaseAgeExclude:
   - prettier@3.9.9
