@@ -8,7 +8,7 @@
  */
 
 import * as Comlink from 'comlink'
-import type { PhotoRef } from '../src/core/photo-source'
+import type { PhotoRef, PhotoSource } from '../src/core/photo-source'
 import { DEFAULT_DTYPE, DEFAULT_MODEL_ID, modelBytes, modelSpec } from '../src/storage/models'
 import type { DbService, PhotoWrite } from '../src/storage/db.worker'
 import { clearOpfsFiles, countOpfsFiles, opfsDirectory, writeOpfsFile } from '../src/storage/opfs'
@@ -18,6 +18,7 @@ import { DEFAULT_DECODE_OPTIONS, decodePhoto } from '../src/workers/decode'
 import type { EmbedService } from '../src/workers/embed.worker'
 import type { CorpusFile, CorpusSink } from './corpus'
 import { DEFAULT_CORPUS, generateCorpus } from './corpus'
+import { FileListPhotoSource } from './file-list-source'
 
 const params = new URLSearchParams(location.search)
 const COUNT = Number(params.get('count') ?? 200)
@@ -25,6 +26,7 @@ const DECODE_CONCURRENCY = Number(params.get('decode') ?? 3)
 const DTYPES = ['q4f16', 'fp16', 'fp32'] as const
 const DTYPE = DTYPES.find((candidate) => candidate === params.get('dtype')) ?? DEFAULT_DTYPE
 const MODEL_ID = params.get('model') ?? DEFAULT_MODEL_ID
+const SOURCE = params.get('source') === 'files' ? 'files' : 'opfs'
 const BATCH_SIZE = 32
 const CORPUS_SEGMENTS = ['bench-corpus'] as const
 const THUMB_SEGMENTS = ['bench-thumbs'] as const
@@ -54,6 +56,21 @@ async function corpusSink(): Promise<CorpusSink> {
   }
 }
 
+function medianOf(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)] ?? 0
+}
+
+/** 等 runner 把目录塞进 `<input webkitdirectory>`；超时即失败，不静默跑空语料 */
+async function waitForDirectoryFiles(input: HTMLInputElement): Promise<File[]> {
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline) {
+    if (input.files !== null && input.files.length > 0) return [...input.files]
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error('等待语料目录超时（bench/runner.mjs 应该用 setInputFiles 注入）')
+}
+
 /** §7.6：size + 首尾各 64 KB 的哈希；内容身份让移动/重命名不触发重算 */
 async function contentHash(blob: Blob): Promise<string> {
   const slice = 64 * 1024
@@ -71,12 +88,30 @@ async function main(): Promise<void> {
   const startedAll = performance.now()
   render({ phase: 'opfs:corpus' })
 
-  const corpusDirectory = await opfsDirectory(...CORPUS_SEGMENTS)
-  const existing = await countOpfsFiles(corpusDirectory)
-  let corpusReport: unknown = { reused: existing }
-  if (existing !== COUNT) {
-    await clearOpfsFiles(corpusDirectory)
-    corpusReport = await generateCorpus(await corpusSink(), { ...DEFAULT_CORPUS, count: COUNT })
+  /** files 模式：语料来自磁盘真实照片，由 bench/runner.mjs 通过 setInputFiles 注入 */
+  let fileSource: FileListPhotoSource | null = null
+  let corpusReport: unknown = {}
+  if (SOURCE === 'files') {
+    const hint = document.getElementById('corpus-hint')
+    if (hint !== null) hint.hidden = false
+    const input = document.getElementById('corpus') as HTMLInputElement | null
+    if (input === null) throw new Error('页面缺少 #corpus 输入元素')
+    const files = await waitForDirectoryFiles(input)
+    fileSource = new FileListPhotoSource('bench', files)
+    corpusReport = {
+      source: 'files',
+      count: fileSource.count,
+      bytes: fileSource.bytes,
+      medianBytes: medianOf([...files].map((file) => file.size)),
+    }
+  } else {
+    const corpusDirectory = await opfsDirectory(...CORPUS_SEGMENTS)
+    const existing = await countOpfsFiles(corpusDirectory)
+    corpusReport = { reused: existing }
+    if (existing !== COUNT) {
+      await clearOpfsFiles(corpusDirectory)
+      corpusReport = await generateCorpus(await corpusSink(), { ...DEFAULT_CORPUS, count: COUNT })
+    }
   }
 
   render({ phase: 'load:models', corpus: corpusReport })
@@ -102,7 +137,7 @@ async function main(): Promise<void> {
     modelSpec(MODEL_ID).space,
     model.dim,
   )
-  const source = new OpfsPhotoSource('bench', CORPUS_SEGMENTS)
+  const source: PhotoSource = fileSource ?? new OpfsPhotoSource('bench', CORPUS_SEGMENTS)
 
   const refs: PhotoRef[] = []
   for await (const ref of source.list()) refs.push(ref)

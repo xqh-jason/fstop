@@ -8,14 +8,17 @@
 | 项 | 值 |
 |---|---|
 | 机器 | Apple M2（MacBook Air），macOS 27 |
-| 浏览器 | omp 托管 Chromium，headless；`WEBGL_debug_renderer_info` = `ANGLE (Apple, ANGLE Metal Renderer: Apple M2)`，**非软件光栅化** |
+| 环境 A | omp 托管 Chromium，headless；`WEBGL_debug_renderer_info` = `ANGLE (Apple, ANGLE Metal Renderer: Apple M2)`，**非软件光栅化** |
+| 环境 B | **系统 Chrome 153.0.0.0（headless，`channel: 'chrome'`）**，由 `pnpm bench` 驱动 —— 这才是权威环境 |
 | WebGPU | 可用；`adapter.info` 为空对象，**无法据此判定软硬件适配器**（必须用 WebGL 渲染器名兜底） |
 | 网络 | 本机经 HTTP 代理，实测 ~0.45 MB/s（Node 端）；用户直连 HF 为 2.6 MB/s（计划附录 A） |
-| 语料 | 合成语料 24 张（60% 4032×3024 + 20% 4000×3000 + 10% 6000×4000 + 10% 小图），JPEG q0.85 |
+| 语料 | 合成语料（60% 4032×3024 + 20% 4000×3000 + 10% 6000×4000 + 10% 小图），JPEG q0.85，单张仅 ~200 KB |
 | 拓扑 | 1 个 embed worker（串行）+ 3 路并发解码；缩略图 320px q0.8；向量写 OPFS 扁平矩阵 |
 
-> 环境差异要说清：本记录里的绝对延迟来自 headless 模式，比有头模式通常略差或略好，**不是验收数字**；
-> 权威数字必须在用户自己的 Chrome（有头、硬件加速）上复测（M0 收口时补）。
+> **头号教训：浏览器构建版本对数字的影响大于模型选择。** 同一台机器、同一份语料：
+> 环境 A 得到 4.38 photos/s，环境 B 得到 9.96 photos/s（decode 175 ms → 43 ms，embed 320 ms → 201 ms）。
+> 因此**任何基准结果必须连浏览器 user agent 一起记录**，否则数字没有意义。
+> 环境 A 的绝对值不应再被引用。
 
 ## 1. 首启体积与 dtype（§九 第 1 项）
 
@@ -41,14 +44,21 @@
 
 ## 2. 单张向量化延迟（§九 第 2 项）
 
-24 张的中位值（含首次调用）：
+24 张的中位值（环境 B = 系统 Chrome 153）：
 
 | 配置 | embed 中位 | decode 中位 | 端到端 photos/s | 1 万张外推 |
 |---|---|---|---|---|
-| Chinese-CLIP ViT-B/16 q4f16（默认） | **320 ms** | 175 ms | 4.38 | **38 分钟** |
-| clip-vit-base-patch32 q4f16（对照） | 223 ms | 123 ms | 6.93 | 24 分钟 |
+| Chinese-CLIP ViT-B/16 q4f16（默认，`dualTower: true`） | **201 ms** | 43 ms | 9.96 | **16.7 分钟** |
+| clip-vit-base-patch32 q4f16（**显式单塔**，`dualTower: false`） | **72 ms** | 37 ms | 20.76 | **8 分钟** |
+| 环境 A 同配置（仅作对照，不应再引用） | 320 ms | 175 ms | 4.38 | 38 分钟 |
 
-**两个配置的 `dualTower` 都是 true**，即两者都在白算另一塔——见下一节。
+**双塔白算的代价被量化了：每张 ~129 ms，占 embed 时间的 64%。**
+
+按 §九 的通过线：
+
+- 默认模型 201 ms → 落在「150 ms–1 s → 降规格」区间；单塔模型 72 ms → 通过（≤150 ms）。
+- 1 万张外推：默认 16.7 分钟（**过 20 分钟验收线，未过 10 分钟冲刺线**）；单塔 8 分钟（过冲刺线）。
+- 但这两组都是**合成语料**（单张 ~200 KB，真实相机 3–6 MB），read/decode 被低估，真实语料复测见 §4。
 
 ### 关键发现：单文件双塔 + 库的解析方式
 
@@ -65,33 +75,44 @@
 
 ### 结论（按计划 §九 的通过线）
 
-- 热延迟 320 ms / 223 ms，**都在 150 ms–1 s 区间** → 按计划应当「降规格」；
-- 1 万张外推 38 分钟，**未达 20 分钟验收线**（24 分钟也差得远）；
-- 但这两组数字里都含有「白算另一塔」的冤枉开销。**在拿到单塔数字之前，不应据此换模型**——
-  这是 M1 的第一个待决项，三条路：
-  1. 英文库走 `CLIPVisionModelWithProjection` + `CLIPTextModelWithProjection`（最省事，但中文文本侧质量差，违背默认模型的初衷）；
-  2. 保留 Chinese-CLIP，接受双塔开销（当前 320 ms/张，需在真实 Chrome 上复测）；
-  3. 拆塔导出（optimum 转换）或直接用 `onnxruntime-web` 指定 fetch 以剪掉另一塔
-     —— 代价是自己写预处理，正是计划 §十 已经标记的 5 天上限路径。
+- 热延迟：默认 201 ms / 单塔 72 ms，**分居 150 ms 线的两侧**；
+- 1 万张外推：默认 16.7 分钟（过验收线、未过冲刺线）、单塔 8 分钟（过冲刺线）；
+- 差距全部来自「白算另一塔」，因此 **M1 的第一个待决项就是怎么拆掉它**，三条路：
+
+| 方案 | 收益 | 代价 |
+|---|---|---|
+| A. 英文库用 `CLIPVisionModelWithProjection` + `CLIPTextModelWithProjection`（已实现并实测 72 ms） | 立即拿到单塔速度 | **中文文本检索质量丢失**，违背默认模型选型的初衷 |
+| B. 保留 Chinese-CLIP 现状（双塔） | 零改动，中文质量最好 | 16.7 分钟，达不到 10 分钟冲刺线；每次查询也白算视觉塔 |
+| C. 拆塔导出（optimum 转换）或直接用 `onnxruntime-web` 只 fetch 需要的输出 | 中文质量 + 单塔速度 | 自己写预处理/会话管理，正是计划 §十 标记的 5 天上限路径；需要验证 ORT 的按需输出剪枝是否真的生效 |
+
+**M0 阶段不做选择**：A 已在代码里（`towers: 'split'`），B 是当前默认，C 需要一次 spike。
+另有一个 M0 完全没测的维度：**检索质量**（中文 query 命中率），它才是 B/C 之争的真正裁判。
 
 ## 3. HEIC 解码（§九 第 3 项）
 
 - 夹具：`sips` 从样例 JPEG 转出的真实 HEIF/HEVC（`ISO Media, HEIF Image HEVC Main`），3 个。
 - 结果：`createImageBitmap` → **`The source image could not be decoded.`**（失败）
-- 结论：**托管 Chromium 解不开 HEIC**，与 MDN 不含 HEIF/HEIC 一致。
-  计划 §九 的预案成立：要么引 libheif wasm（+1–2 MB），要么明确排除并告知用户。
-- 残留风险：本机只测了 macOS 上的一个 Chromium 构建；Windows/Linux 未测。
-  **真实 iPhone 原图（HDR gain map、10-bit、Live Photo 容器）尚未覆盖**，需要用户提供样张。
+- 结论：**Chromium 解不开 HEIC**，与 MDN 不含 HEIF/HEVC 一致。
+- **定稿决定（2026-09-24）**：用户无 iPhone HEIC / 相机 RAW 样张，真机覆盖无法补齐，
+  因此按计划 §九 的第二个预案落地 —— **明确排除 + 界面告知**；
+  libheif wasm（+1–2 MB）降级为 M1 待评估项，不进 M0 结论。RAW 本就不在 P0/P1 范围。
+- 残留风险：本机只测了 macOS 上的两个 Chromium 构建；Windows/Linux 未测。
 
 ## 4. 端到端吞吐（§九 第 4 项）
 
-上表的 4.38 / 6.93 photos/s 是 24 张合成语料的结果，**不构成 1000 张真实库的结论**：
+`pnpm bench` 已可复现（Playwright 驱动系统 Chrome，语料经 `<input webkitdirectory>` 注入，不复制文件）。
 
-- 缺 1000 张真实照片库（用户后续提供）；
-- 分阶段中位：read 1 ms、hash 2–3 ms、decode 123–175 ms、embed 223–320 ms、thumb 3–6 ms；
-  **瓶颈完全在 embed**，decode 次之；
-- 入库链路已跑通：迁移在浏览器内真实执行（`schemaVersion: 1`、`applied: 1`），
-  `photos/embeddings/jobs` 各 24 行，向量矩阵 24 槽位，缩略图写入 OPFS。
+| 语料 | 配置 | photos/s | 1 万张外推 |
+|---|---|---|---|
+| 合成 24 张（单张 ~200 KB） | 默认 Chinese-CLIP 双塔 | 9.96 | 16.7 分钟 |
+| 合成 24 张 | 英文 CLIP 单塔 | 20.76 | 8 分钟 |
+| **真实 CC0 原图 1000 张** | 待测（`scripts/fetch-corpus.mjs` 抓取中） | — | — |
+
+分阶段中位（默认配置，合成语料）：read 1 ms、hash 1 ms、decode 43 ms、embed 201 ms、thumb 2 ms
+→ **瓶颈完全在 embed**；真实语料会抬高 read/decode（真实相机 JPEG 3–6 MB、12–24 MP）。
+
+入库链路已跑通：迁移在浏览器内真实执行（`schemaVersion: 1`、`applied: 1`），
+`photos/embeddings/jobs` 行数与照片数一致，向量矩阵槽位数一致，缩略图写入 OPFS。
 
 ## 5. `opfs-sahpool` 多标签页（§九 第 5 项）
 

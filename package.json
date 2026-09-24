@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "bench": "node bench/runner.mjs",
     "check:egress": "node scripts/check-egress.mjs",
     "verify": "pnpm typecheck && pnpm lint && pnpm check:egress && pnpm test"
   },

@@ -29,6 +29,22 @@ pnpm build        # typecheck + production build
 
 Requirements: Node `>=22.22` (unit tests run the real SQLite schema through `node:sqlite`) and pnpm 11. Target runtime is **desktop Chromium only** (Chrome / Edge 86+); Firefox and Safari are out of scope by design — see the project plan in `docs/`.
 
+## Benchmarks
+
+Performance numbers in issues or PRs must be reproducible, so they come from one entry point:
+
+```bash
+pnpm bench                                   # synthetic corpus (deterministic, OPFS)
+pnpm bench -- --corpus bench/corpus          # real photos from a directory
+pnpm bench -- --headed --count 200           # visible Chrome, smaller run
+pnpm bench -- --model Xenova/clip-vit-base-patch32 --dtype q4f16
+```
+
+- The driver (`bench/runner.mjs`) starts Vite, launches your installed Chrome via Playwright (`channel: 'chrome'`), feeds the corpus into a `webkitdirectory` input — the native directory picker cannot be automated — and writes `bench/results/<timestamp>.json`.
+- The synthetic corpus is generated in-browser and is deterministic in _content_; JPEG bytes depend on the browser encoder, so compare `photos/s`, not file sizes.
+- Real-photo corpora are **not** committed (GB scale). `bench/corpus-manifest.json` pins the exact files and target widths, so anyone can re-fetch the same set: `NODE_USE_ENV_PROXY=1 node scripts/fetch-corpus.mjs --count 1000`.
+- Every result must be reported with the browser user agent; a software rasterizer (SwiftShader / llvmpipe) makes the numbers meaningless.
+
 ## Workflow
 
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`).

@@ -21,7 +21,7 @@ export default defineConfigWithVueTs(
   skipFormatting,
   {
     name: 'fstop/scripts',
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'bench/**/*.mjs'],
     // 命令行脚本的输出就是它的产物
     rules: { 'no-console': 'off' },
   },

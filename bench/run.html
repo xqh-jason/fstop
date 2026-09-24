@@ -19,14 +19,20 @@
         white-space: pre-wrap;
         word-break: break-all;
       }
+      #corpus-hint {
+        color: #f0b429;
+      }
     </style>
   </head>
   <body>
     <h1>M0 基准</h1>
     <p>
-      参数：<code>count</code> / <code>decode</code> / <code>dtype</code> /
-      <code>model</code>。结果写入 <code>window.__BENCH_RESULT</code>。
+      参数：<code>count</code> / <code>decode</code> / <code>dtype</code> / <code>model</code> /
+      <code>source=opfs|files</code>。结果写入 <code>window.__BENCH_RESULT</code>。
     </p>
+    <p id="corpus-hint" hidden>等待语料目录…（由 bench/runner.mjs 通过 setInputFiles 注入）</p>
+    <!-- 真实语料的入口：Playwright 直接把目录塞进来，不需要用户手势，也不复制文件 -->
+    <input id="corpus" type="file" webkitdirectory multiple hidden />
     <pre id="out">starting…</pre>
     <script type="module" src="/bench/run.ts"></script>
   </body>

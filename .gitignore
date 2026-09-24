@@ -20,3 +20,5 @@ blob-report/
 # 基准产物与本地夹具（HEIC 真机样张等，不入库）
 bench/results/
 bench/fixtures/
+# 真实照片语料本体（GB 级，不入库；可提交的清单是 bench/corpus-manifest.json）
+bench/corpus/

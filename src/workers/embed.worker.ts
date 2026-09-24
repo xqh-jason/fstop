@@ -18,6 +18,8 @@ import {
   AutoModel,
   AutoProcessor,
   AutoTokenizer,
+  CLIPTextModelWithProjection,
+  CLIPVisionModelWithProjection,
   RawImage,
   Tensor,
 } from '@huggingface/transformers'
@@ -93,22 +95,16 @@ interface LoadedModel {
 async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
   const modelId = options.modelId ?? DEFAULT_MODEL_ID
   const spec = modelSpec(modelId)
+  const dtype = options.dtype ?? DEFAULT_DTYPE
+  const device = options.device ?? 'webgpu'
 
   configureModelRuntime()
   const loadStarted = performance.now()
-  const model = await AutoModel.from_pretrained(modelId, {
-    dtype: options.dtype ?? DEFAULT_DTYPE,
-    device: options.device ?? 'webgpu',
-  })
+
   // transformers.js 没有 ChineseCLIPProcessor（processing_auto 里没有 chinese_clip），
   // AutoProcessor 只会给出图像处理器，因此文本侧必须单独取 tokenizer。
   const processor = await AutoProcessor.from_pretrained(modelId)
   const tokenizer = await AutoTokenizer.from_pretrained(modelId)
-  const loadMs = Math.round(performance.now() - loadStarted)
-
-  const run = model as unknown as (
-    inputs: Record<string, unknown>,
-  ) => Promise<Record<string, unknown>>
   const prepare = processor as unknown as (images: unknown) => Promise<Record<string, unknown>>
   const encode = tokenizer as unknown as (
     text: string[],
@@ -136,6 +132,42 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
     }
     return vector
   }
+
+  // 分塔模型必须显式用任务专属类：`AutoModel` 与 `pipeline('feature-extraction')` 都会解析成
+  // 双塔 `CLIPModel`（实测：文本调用报缺 `pixel_values`），单塔推理根本拿不到。
+  if (spec.towers === 'split') {
+    const vision = await CLIPVisionModelWithProjection.from_pretrained(modelId, { dtype, device })
+    const text = await CLIPTextModelWithProjection.from_pretrained(modelId, { dtype, device })
+    const loadMs = Math.round(performance.now() - loadStarted)
+    const callVision = vision as unknown as (
+      inputs: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>
+    const callText = text as unknown as (
+      inputs: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>
+    return {
+      loadMs,
+      dualTower: false,
+      embedImage: async (bitmap) =>
+        assertDim(
+          normalize(firstEmbedding(await callVision(await prepare(toRawImage(bitmap)))).data),
+        ),
+      embedText: async (input) =>
+        assertDim(
+          normalize(
+            firstEmbedding(await callText(encode([input], { padding: true, truncation: true })))
+              .data,
+          ),
+        ),
+    }
+  }
+
+  const model = await AutoModel.from_pretrained(modelId, { dtype, device })
+  const loadMs = Math.round(performance.now() - loadStarted)
+
+  const run = model as unknown as (
+    inputs: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>
 
   // 占位输入只建一次：602 KB 的零张量没必要每次调用都重新分配
   let imagePlaceholder: Tensor | null = null

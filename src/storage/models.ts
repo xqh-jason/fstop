@@ -28,6 +28,13 @@ export interface ModelSpec {
   readonly space: string
   readonly dim: number
   readonly license: string
+  /**
+   * 权重文件的塔结构：
+   * - `split`：vision 与 text 各有独立 ONNX，可分别加载，**单塔推理不白算另一塔**
+   * - `single-file`：两个塔在同一张 ONNX 图里，ORT 会计算全部输出 → 每次调用都白算另一塔
+   *   （M0 实测：只喂一侧输入直接报 `Missing the following inputs`）
+   */
+  readonly towers: 'split' | 'single-file'
   readonly dtypes: Readonly<Record<Dtype, readonly ModelFile[]>>
 }
 
@@ -37,6 +44,7 @@ export const MODEL_CATALOG: readonly ModelSpec[] = [
     space: 'chinese-clip-vit-b16',
     dim: 512,
     license: '模型卡未声明 license → 不再分发，仅脚本拉取（见 NOTICE）',
+    towers: 'single-file',
     dtypes: {
       q4f16: [{ file: 'onnx/model_q4f16.onnx', bytes: 131794439 }],
       fp16: [{ file: 'onnx/model_fp16.onnx', bytes: 377377730 }],
@@ -48,6 +56,7 @@ export const MODEL_CATALOG: readonly ModelSpec[] = [
     space: 'clip-vit-b32',
     dim: 512,
     license: 'MIT',
+    towers: 'split',
     dtypes: {
       q4f16: [
         { file: 'onnx/vision_model_q4f16.onnx', bytes: 53267374 },
