@@ -1,6 +1,6 @@
 # Fstop · 光圈 —— 交接说明
 
-> 给接手的人/agent。**先读这一份，再读计划与实测记录。** 最后更新：2026-09-24，对应提交 `101dcca`。
+> 给接手的人/agent。**先读这一份，再读计划与实测记录。** 最后更新：2026-09-24（检索质量补测后）。
 
 ## 0. 一句话状态
 
@@ -34,7 +34,7 @@
 | `src/workers/embed.worker.ts` | ✅ | 单实例推理 Worker；**双塔/单塔两种加载路径** |
 | `src/shared/env.ts` | ✅ | 能力探测（FSA / OPFS / WebGPU / persist） |
 | `src/app`、`src/ui` | ✅ 壳 | 应用装配 + 能力面板；**检索 UI 未做** |
-| `bench/` | ✅ M0 级 | 探针、基准页、检索延迟页、Playwright 驱动器、合成语料、HTTP 语料源 |
+| `bench/` | ✅ M0 级 | 探针、基准页、检索延迟页、**检索质量页（§9A2 已完成）**、Playwright 驱动器、合成语料、HTTP 语料源 |
 | `scripts/` | ✅ | 零外发检查、样例/权重/语料/HEIC 夹具脚本 |
 | `tests/unit/` | ✅ 23 项 | 用 `node:sqlite` 跑**真实建表与约束**（不是正则断言 SQL 文本） |
 | `public/samples/` | ✅ | 39 张 CC0 样例图 + `manifest.json`（逐张来源/许可/sha256） |
@@ -65,7 +65,8 @@
 | 3 HEIC | `createImageBitmap` 解不开真实 HEIF/HEVC | 定稿：**明确排除 + 界面告知**；libheif wasm 列 M1 待评估 |
 | 4 端到端吞吐 | 783 张真实 CC0 原图（1.71 GB）→ **13.6 photos/s，1 万张外推 12.3 分钟** | **过验收线（≤20 分钟），未过冲刺线（≤10 分钟）** |
 | 5 多标签页 | 无选主第二标签页硬失败 `NoModificationAllowedError`；Web Locks 选主后优雅退化 | §7.3 方案验证有效，**必须做** |
-| 附加·检索延迟 | 文本向量化 70.8 ms + 1 万条 × 512 维暴力余弦 7.3 ms = **78.1 ms** | 预算 300 ms，通过 |
+| 附加·检索延迟 | 文本向量化 70.8 ms + 1 万条 × 512 维暴力余弦 7.3 ms = **78.1 ms** | 预算 300 ms，通过（⚠ 见 §7 的向量 bug 说明：延迟有效，但当时向量是错的） |
+| 附加·检索质量（2026-09-24 补测） | **中文 R@1 = 100%**（Chinese-CLIP 双塔）；英文 CLIP 单塔中文 R@1 = **13%** | **方案 A 出局**，细节见实测记录 §7 |
 
 分阶段中位：read 4 / hash 1 / **decode 47** / **embed 154** / thumb 2 ms → 瓶颈在 embed（约 70%）。
 
@@ -97,6 +98,8 @@ pnpm bench                                   # 合成语料（OPFS，可复现�
 pnpm bench -- --source http                  # 真实语料（需先抓，见下）
 pnpm bench -- --source http --limit 200      # 分块跑
 pnpm bench -- --query                        # 检索延迟（§八 ≤300 ms）
+pnpm bench -- --quality                      # 检索质量：中文 query 命中率（实测记录 §7）
+pnpm bench -- --quality --model Xenova/clip-vit-base-patch32   # 对照：英文单塔
 pnpm bench -- --headed                       # 有头模式（尚未复测，建议补一次）
 
 # 数据准备（都走代理时需要 NODE_USE_ENV_PROXY=1）
@@ -141,24 +144,36 @@ node scripts/make-heic-fixtures.mjs [含 .heic 的目录]          # HEIC 夹具
 | `info.url` 现在带 `?utm_...` | API 变更 | 拼 URL 前先剥查询串 |
 | 语料候选被博物馆扫描件淹没 | 低熵、体积小，会把 read/decode 带偏 | 加 **EXIF 相机型号**过滤 |
 | 文件名碰撞导致清单条目落空 | 长标题截断后 slug 相同 | 文件名附标题哈希；清单加载时校验 sha256 并剔除不一致项 |
+| **双塔 `embedText` 返回的是占位零图的 `image_embeds`**（所有 query 同一个常量向量，检索结果与文本无关） | 双塔 ONNX 图同时输出 `image_embeds`/`text_embeds`，`firstEmbedding` 按优先级永远先命中前者 | 已修：`embeddingFor(outputs, 模态)` 显式选输出；质量页加「不同文本 → 不同向量」烟雾测试。**M0 已录的检索延迟数字仍有效**（计算量相同），详见实测记录 §7 |
 
 ## 9. 下一步
 
 ### A. M0 收口（都不阻塞结论）
 1. `pnpm bench -- --headed` 复测一次，确认 headless 数字不偏乐观；
-2. **检索质量**（中文 query 命中率）——M0 完全没测，却是默认模型选型的**真正裁判**；
-3. 拆塔方案 C 的 spike：直接用 `onnxruntime-web` 只 fetch 需要的输出，验证 ORT 是否真能剪掉另一塔；
-4. `files` 模式（`<input webkitdirectory>`）在持久化 profile 下静默失败的根因——M1 的 Playwright 端到端若要复用，必须先弄清。
+2. ~~检索质量（中文 query 命中率）~~ → **已完成（2026-09-24）**：`pnpm bench -- --quality`，
+   Chinese-CLIP 中文 R@1 = **100%** / MRR 1.0，英文 CLIP 单塔中文 R@1 = **13%** → **方案 A 出局**（实测记录 §7）；
+3. 拆塔方案 C 的 spike：直接用 `onnxruntime-web` 只 fetch 需要的输出，验证 ORT 是否真能剪掉另一塔
+   ——**质量判定后它是 B/C 之争的唯一悬念，M1 前最值得做**。
+   **进度（2026-09-24，进行中）**：`bench/towers.ts` + `towers.html` 已写好（`pnpm bench -- --towers`），
+   前置可行性已从 transformers.js 源码确认：`model.sessions['model']` 是公开字段、`Tensor.ort_tensor`
+   可直取底层张量、其 `runInferenceSession` 确实从不传输出列表（白算的来源坐实）。
+   已修两个运行时坑（页面异常未渲染导致 runner 白等、零张量构造误传 `data.buffer` 应传 `Float32Array`），
+   **尚未跑出数字**：修复后重跑一次即可（模型已缓存，约 1 分钟）。
+4. ~~`files` 模式（`<input webkitdirectory>`）在持久化 profile 下静默失败的根因~~ → **已完成（2026-09-24）**：
+   Chromium 枚举目录时**逐项过滤软链**（安全机制，枚举不中断；混合目录只丢软链项，更隐蔽），
+   与 Playwright、持久化 profile 均无关。探针 `node bench/files-probe.mjs`（real/hardlink/softlink/mixed 对照）。
+   **给 M1 的两条**：① E2E 夹具目录一律复制或硬链接，禁止软链；② 生产同理——真实用户选中的文件夹里若有软链照片（或软链子目录）会被静默跳过，索引页应展示「选中数 vs 入库数」差值（可观测性），软链子目录是否被跟进可用探针扩展验证。
 
 ### B. M1 第一个决策：怎么拆掉双塔白算
 
 | 方案 | 收益 | 代价 |
 |---|---|---|
-| A 英文库用单塔类（**已实现并实测**） | 立即拿到单塔速度（embed 72 ms） | 中文文本检索质量丢失，违背默认模型选型初衷 |
-| B 维持双塔（当前默认） | 零改动、中文质量最好 | 12.3 分钟（过验收线、未过冲刺线）；每次查询也白算视觉塔 |
+| A 英文库用单塔类（已实现并实测） | 立即拿到单塔速度（embed 72 ms） | ~~中文文本检索质量丢失~~ **已实测证实：中文 R@1 仅 13%，出局** |
+| B 维持双塔（当前默认） | 零改动、**中文质量实测满分（R@1 100%）** | 12.3 分钟（过验收线、未过冲刺线）；每次查询也白算视觉塔 |
 | C 拆塔导出（optimum）或直接用 ort 只 fetch 需要的输出 | 中文质量 + 单塔速度 | 要自己写预处理/会话管理，正是计划 §十 标记的 5 天上限路径 |
 
-**不要只比速度就选**：先测检索质量（§A2），否则会选错模型。
+**§A2 的质量实测已把 B/C 之争的裁判打完：A 出局，B 保底成立，C 是唯一同时满足
+「中文质量 + 10 分钟冲刺线」的路径。** 下一步做 C 的 spike（§A3）即可定案。
 
 ### C. M1 范围（按计划 §九）
 文件夹选择 + 权限持久化 + `navigator.storage.persist()`；`content_hash` + `deleted_at` 增量识别；

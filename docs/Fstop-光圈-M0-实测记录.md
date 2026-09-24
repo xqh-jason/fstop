@@ -147,18 +147,62 @@
 | **`VectorMatrix.append` 有槽位竞态**：offset 在 `await write()` 之后自增，3 个并发 worker 会算出同一槽位 → 撞 `UNIQUE (model_id, matrix_offset)`，批次写失败 → promise 拒绝 → **页面静默空转**（无任何可见错误） | 已修：槽位改为 await 之前**同步预留**；定位写入允许乱序完成 |
 | **数据库连接只有一个，`BEGIN` 不能并发**：多个解码 worker 同时提交批次会互相打断 | 已修：批量写串行化 |
 | **强杀会留下陈旧的 `SingletonLock`**，Chrome 见到它直接拒绝启动（`Failed to create SingletonLock: File exists`） | 已修：启动前清理 profile 的进程单例锁 |
-| **`setInputFiles` 对软链目录静默置空**（`input.files.length` 恒为 0），对真实文件正常；且 Playwright **拒绝**给 `webkitdirectory` 传文件数组 | 基准改用 dev server + HTTP 语料源（`bench/http-photo-source.ts`）；`--limit` 用硬链接子集目录 |
+| **`setInputFiles` 对软链目录静默置空**（`input.files.length` 恒为 0），对真实文件正常；且 Playwright **拒绝**给 `webkitdirectory` 传文件数组 | **根因已钉死（§8 第 7 项，2026-09-24）**：Chromium 对 `webkitdirectory` 目录枚举做**逐项软链过滤**（安全机制）——混合目录实测只丢软链项、真实项照常进列表（枚举不中断），与 Playwright 和持久化 profile 均无关。探针：`node bench/files-probe.mjs`（real/hardlink/softlink/mixed 四形态对照） | 基准改用 dev server + HTTP 语料源（`bench/http-photo-source.ts`）；`--limit` 用硬链接子集目录；**E2E 夹具目录一律复制或硬链接，禁止软链** |
 | 基准页只写 DOM 不写 console 时，「卡住」完全无从诊断 | 已修：页面进度 + 心跳（含当前阶段）转发到驱动器控制台；`pageerror` 立刻打印 |
 
 > 教训：**这三类「静默卡死」全都源于缺少可观测性**（无进度、无错误输出、无心跳）。
 > 加上心跳与即时 pageerror 后，同样的故障在 5 秒内就暴露了根因。
 
-## 7. 尚未完成（M0 收口前必须补）
+## 7. 检索质量（§七 尚未完成第 5 项，M0 收口补测 · 2026-09-24）
+
+**这一项是默认模型选型的真正裁判**（交接说明 §9B），M0 主体完全没测。补测页：`bench/quality.html`
+（`pnpm bench -- --quality [--model ...]`）。
+
+### 方法
+
+- 语料：内置 39 张 CC0 样例（`public/samples/`，按 20 个主题 × ~2 张挑选，`discoveredBy` 即主题）。
+- ground truth：`bench/quality-queries.json`，23 条「用户口吻」query × 中英双语；目标 = 该主题的全部样例。
+  个别样例与主题名不符已按**实际图片内容**修正并逐张人工核实：bird-water-01 是天鹅+富士山、
+  bird-water-02 是货轮日落、bicycle-street-01/02 无实车（只有路牌）、car-vintage-01 是老式轿车。
+- 指标：Recall@1/5/10（最优目标排名 ≤ k 的 query 占比）与 MRR。39 张里随机 top-1 命中率约 5%。
+
+### 实测（Chrome 153 headless，q4f16，样例库即检索库）
+
+| 模型 | zh R@1 | zh R@5 | zh R@10 | zh MRR | en R@1 | en MRR |
+|---|---|---|---|---|---|---|
+| Chinese-CLIP ViT-B/16 双塔（默认） | **100%** | 100% | 100% | **1.0** | 95.7% | 0.978 |
+| 英文 CLIP ViT-B/32 单塔（方案 A 的配置） | **13.0%** | 56.5% | 73.9% | 0.338 | 100% | 1.0 |
+
+- Chinese-CLIP 唯一的英文失误是 `road-in-forest`（排第 2，被 forest-path 挡住，合理混淆）。
+- 英文 CLIP 的中文失败不是「差一点」：6/23 条的目标连 top-10 都进不去（boats-harbor、
+  calligraphy-page、vintage-motorbikes、playground、path-in-forest、typing-keyboard）。
+- 同一样例库上的图像向量化中位：双塔 66 ms / 单塔 34 ms，与 §2 的塔结构结论一致。
+
+### 对 §9B 决策的判定
+
+**方案 A（英文库单塔）出局**：中文 R@1 从 100% 崩到 13%，违背默认模型选型的初衷。
+剩余选择只有 B（维持双塔，12.3 分钟，过验收线）与 C（拆塔，中文质量 + 单塔速度，
+是同时够到 10 分钟冲刺线与中文质量的唯一路径）——C 的 spike（§七 第 6 项）因此更有必要做。
+
+### 顺带抓到的真 bug（已修，影响 M0 已录数字的解释）
+
+首跑时 23 条 query 排名逐位相同：双塔 ONNX 图同时输出 `image_embeds` 与 `text_embeds`，
+而 `firstEmbedding` 按优先级**永远先取 `image_embeds`** → 双塔路径的 `embedText` 返回的是
+「占位零图」的图像向量（常量），文本检索与输入完全无关。修复：`embeddingFor(outputs, 模态)`
+显式选输出（`src/workers/embed.worker.ts`），质量页加「不同文本必须得到不同向量」的烟雾测试。
+
+**对已录数字的影响**：§2 的检索延迟 78.1 ms 是在错误向量上测的——但测的是同一张图、
+同一份计算量，**延迟数字仍有效**；而「1 万条检索是否正确」此前无人知晓。教训：
+**没有 ground truth 的基准只能测成本，测不出正确性**——延迟页跑了几轮都没发现向量是垃圾。
+
+## 8. 尚未完成（M0 收口前必须补）
 
 1. ~~1000 张真实照片库~~ → **已用网上 CC0 原图替代**（783 张，1.71 GB），用户无私库；
 2. ~~在用户 Chrome 上复测~~ → **已完成**（Chrome 153 headless，`pnpm bench`）；
 3. ~~真实 iPhone HEIC 样张~~ → 用户无样张，按「明确排除 + 界面告知」定稿；
 4. **有头模式（`--headed`）复测一次**，确认 headless 数字不偏乐观；
-5. **检索质量**（中文 query 命中率）——M0 完全没测，却是默认模型选型的真正裁判；
-6. 拆塔方案 C 的 spike（ORT 按需输出剪枝是否真能省下另一塔）；
-7. `files` 模式（`<input webkitdirectory>`）在持久化 profile 下静默失败的原因未查清——基准已绕开，但 M1 的 Playwright 端到端测试若要复用这条路，得先弄清。
+5. ~~检索质量（中文 query 命中率）~~ → **已完成**（§7：中文 R@1 100%，方案 A 出局）；
+6. 拆塔方案 C 的 spike（ORT 按需输出剪枝是否真能省下另一塔）——**§7 判定后它成为 M1 前最值得做的一项**；
+   进度见交接说明 §9A3：spike 页已写好（`pnpm bench -- --towers`），可行性已从源码坐实，待重跑出数字；
+7. ~~`files` 模式（`<input webkitdirectory>`）在持久化 profile 下静默失败的原因未查清~~ → **已完成（2026-09-24）**：
+   根因是 Chromium 枚举目录时逐项过滤软链（与 profile 无关），探针 `bench/files-probe.mjs` 四形态实证，详见 §7 表格。

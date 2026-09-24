@@ -34,8 +34,9 @@ end-to-end indexing pipeline (decode → embed → thumbnail → OPFS vector mat
 M0 measurements are in. M1 (MVP) has not started.
 
 Measured on an M2 / Chrome 153: 783 real CC0 photos indexed at **13.6 photos/s → 10k extrapolates to 12.3 min**
-(acceptance line 20 min, sprint target 10 min), search latency 78 ms (budget 300 ms), HEIC is **not** decodable
-in Chromium, and `opfs-sahpool` needs Web Locks leader election.
+(acceptance line 20 min, sprint target 10 min), search latency 78 ms (budget 300 ms), Chinese-query retrieval
+**R@1 = 100%** with the default Chinese-CLIP (an English-only CLIP collapses to 13% on the same queries), HEIC
+is **not** decodable in Chromium, and `opfs-sahpool` needs Web Locks leader election.
 
 Documents, in reading order:
 
