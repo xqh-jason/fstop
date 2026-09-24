@@ -1,13 +1,233 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import CapabilityPanel from '../ui/CapabilityPanel.vue'
+/**
+ * 应用外壳（M1）：选文件夹 → 建立索引 → 一句话检索。
+ *
+ * **可自动化的通路**：原生目录选择器 `showDirectoryPicker` 无法被 Playwright 驱动，
+ * 所以 `?root=opfs` 时改用 OPFS 合成根（与基准同一条通路）。
+ * 这样「扫描 → 入库 → 逐条处理 → 检索」整条链路能被端到端跑一遍，
+ * 而不是只有单测覆盖、产品路径靠手点。
+ */
+import * as Comlink from 'comlink'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import type { IndexProgress } from './index-runner'
+import { runIndex } from './index-runner'
+import { type SearchHit, searchPhotos } from './search'
 import { detectCapabilities, type Capabilities } from '../shared/env'
+import {
+  DEFAULT_ROOT_KEY,
+  asDirectoryHandle,
+  ensurePermission,
+  loadStoredRoot,
+  permissionStateOf,
+  pickPhotoFolder,
+  supportsDirectoryPicker,
+} from '../storage/folder-access'
+import type { DbService } from '../storage/db.worker'
+import { opfsDirectory, readOpfsFile } from '../storage/opfs'
+import { OpfsPhotoSource } from '../storage/photo-source-opfs'
+import { FileSystemAccessSource } from '../storage/photo-source-fsa'
+import { VectorMatrix } from '../storage/vector-matrix'
+import type { EmbedService } from '../workers/embed.worker'
+import CapabilityPanel from '../ui/CapabilityPanel.vue'
+
+const params = new URLSearchParams(location.search)
+const ROOT_MODE = params.get('root') ?? 'fsa'
+const OPFS_SEGMENTS = (params.get('opfs') ?? 'bench-corpus')
+  .split('/')
+  .filter((part) => part !== '')
+const TOP_K = Number(params.get('topk') ?? 24)
 
 const capabilities = ref<Capabilities | null>(null)
+const supported = ref(supportsDirectoryPicker())
+const rootLabel = ref<string | null>(null)
+const permission = ref<'granted' | 'prompt' | 'denied' | 'none'>('none')
+const indexing = ref(false)
+const progress = ref<IndexProgress | null>(null)
+const notice = ref<string | null>(null)
+
+const query = ref('')
+const searching = ref(false)
+const hits = ref<readonly SearchHit[]>([])
+const searchNote = ref<string | null>(null)
+const thumbs = ref<Record<string, string>>({})
+
+let db: DbService | null = null
+let embed: EmbedService | null = null
+let vectors: VectorMatrix | null = null
+let thumbsDir: FileSystemDirectoryHandle | null = null
+let source: FileSystemAccessSource | null = null
+let modelId = ''
+let dim = 0
+let controller: AbortController | null = null
+
+const progressText = computed(() => {
+  const value = progress.value
+  if (value === null) return ''
+  if (value.phase === 'scanning') return `正在扫描… 已看到 ${value.scanned} 个文件`
+  if (value.phase === 'planning') return '正在比对增量…'
+  if (value.phase === 'working') {
+    const finished = value.done + value.failed + value.skipped
+    return `正在建立索引… ${finished}/${value.total}（跳过 ${value.skipped}、失败 ${value.failed}）`
+  }
+  if (value.phase === 'done')
+    return `索引完成：${value.done} 张可检索（跳过 ${value.skipped}、失败 ${value.failed}）`
+  if (value.phase === 'cancelled') return '已停止（下次打开会接着算）'
+  if (value.phase === 'failed') return `出错了：${value.error ?? ''}`
+  return ''
+})
 
 onMounted(async () => {
   capabilities.value = await detectCapabilities()
+  await boot()
 })
+
+onUnmounted(() => {
+  controller?.abort()
+  void vectors?.close()
+})
+
+async function boot(): Promise<void> {
+  try {
+    const dbWorker = new Worker(new URL('../storage/db.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    db = Comlink.wrap<DbService>(dbWorker)
+    const embedWorker = new Worker(new URL('../workers/embed.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    embed = Comlink.wrap<EmbedService>(embedWorker)
+
+    const rootId = ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY
+    await db.open(rootId)
+
+    if (ROOT_MODE === 'opfs') {
+      source = new OpfsPhotoSource(rootId, OPFS_SEGMENTS) as unknown as FileSystemAccessSource
+      rootLabel.value = `OPFS:${OPFS_SEGMENTS.join('/')}`
+      permission.value = 'granted'
+    } else {
+      const stored = await loadStoredRoot()
+      if (stored !== null) {
+        rootLabel.value = stored.label
+        permission.value = await permissionStateOf(stored.handle)
+        if (permission.value === 'granted') {
+          source = new FileSystemAccessSource(rootId, asDirectoryHandle(stored.handle))
+        }
+      }
+    }
+
+    const init = await embed.init({ device: 'webgpu' })
+    modelId = init.modelId
+    dim = init.dim
+    vectors = await VectorMatrix.open(
+      await opfsDirectory('fstop-vectors'),
+      modelId.replace(/\//g, '_'),
+      dim,
+    )
+    thumbsDir = await opfsDirectory('fstop-thumbs')
+    await refreshThumbMap()
+  } catch (error) {
+    notice.value = `初始化失败：${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
+async function chooseFolder(): Promise<void> {
+  try {
+    const stored = await pickPhotoFolder()
+    rootLabel.value = stored.label
+    permission.value = (await ensurePermission(stored.handle)) ? 'granted' : 'denied'
+    source = new FileSystemAccessSource(DEFAULT_ROOT_KEY, asDirectoryHandle(stored.handle))
+    notice.value = null
+  } catch (error) {
+    notice.value = `选择文件夹失败：${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
+/** 恢复上次的目录需要用户手势（`requestPermission` 必须由手势触发） */
+async function resumeFolder(): Promise<void> {
+  const stored = await loadStoredRoot()
+  if (stored === null) return
+  const granted = await ensurePermission(stored.handle)
+  permission.value = granted ? 'granted' : 'prompt'
+  if (granted) {
+    source = new FileSystemAccessSource(DEFAULT_ROOT_KEY, asDirectoryHandle(stored.handle))
+    notice.value = null
+  } else {
+    notice.value = '浏览器要求你点一下「继续使用上次的文件夹」才给权限'
+  }
+}
+
+async function startIndex(): Promise<void> {
+  if (source === null || db === null || embed === null || vectors === null || thumbsDir === null) {
+    notice.value = '还没有可索引的文件夹'
+    return
+  }
+  indexing.value = true
+  notice.value = null
+  controller = new AbortController()
+  try {
+    await runIndex({
+      rootId: ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY,
+      source,
+      db,
+      embed,
+      vectors,
+      thumbs: thumbsDir,
+      modelId,
+      dim,
+      signal: controller.signal,
+      onProgress: (value) => {
+        progress.value = value
+      },
+    })
+    await refreshThumbMap()
+  } catch (error) {
+    notice.value = `索引中断：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    indexing.value = false
+    controller = null
+  }
+}
+
+function stopIndex(): void {
+  controller?.abort()
+}
+
+async function runSearch(): Promise<void> {
+  if (db === null || embed === null || vectors === null) return
+  searching.value = true
+  try {
+    const outcome = await searchPhotos({ db, embed, vectors, query: query.value, topK: TOP_K })
+    hits.value = outcome.hits
+    await refreshThumbMap(outcome.hits)
+    searchNote.value =
+      outcome.indexed === 0
+        ? '索引还是空的——先选文件夹并建立索引'
+        : `${outcome.elapsedMs} ms · 库内 ${outcome.indexed} 张` +
+          (outcome.partial ? `（其中 ${outcome.ranked} 张已落盘，索引仍在进行）` : '')
+  } catch (error) {
+    searchNote.value = `检索失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    searching.value = false
+  }
+}
+
+/** 缩略图从 OPFS 读出来做 objectURL；只读当前要显示的那些 */
+async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
+  if (thumbsDir === null) return
+  const keys = (only ?? hits.value)
+    .map((hit) => hit.thumbKey)
+    .filter((key): key is string => key !== null)
+  const next: Record<string, string> = {}
+  for (const key of keys) {
+    if (thumbs.value[key] !== undefined) {
+      next[key] = thumbs.value[key]!
+      continue
+    }
+    const blob = await readOpfsFile(thumbsDir, key)
+    if (blob !== null) next[key] = URL.createObjectURL(blob)
+  }
+  thumbs.value = next
+}
 </script>
 
 <template>
@@ -22,10 +242,77 @@ onMounted(async () => {
 
     <CapabilityPanel :capabilities="capabilities" />
 
-    <p class="status">
-      工程骨架已就绪：数据模型与 <code>PhotoSource</code> / <code>EmbeddingProvider</code>
-      两个接口已定稿，索引与检索将在 M0 实测之后落地。
-    </p>
+    <section class="card">
+      <h2 class="card__title">照片文件夹</h2>
+      <p v-if="rootLabel === null" class="hint">
+        {{ supported ? '还没有选定文件夹。' : '这个浏览器不支持目录选择，需要桌面 Chromium。' }}
+      </p>
+      <p v-else class="hint">
+        已选定 <code>{{ rootLabel }}</code>
+        <span v-if="permission !== 'granted'" class="warn">（权限：{{ permission }}）</span>
+      </p>
+      <div class="row">
+        <button v-if="supported" class="button" :disabled="indexing" @click="chooseFolder">
+          选择文件夹
+        </button>
+        <button
+          v-if="permission === 'prompt'"
+          class="button"
+          :disabled="indexing"
+          @click="resumeFolder"
+        >
+          继续使用上次的文件夹
+        </button>
+        <button
+          v-if="!indexing"
+          class="button button--primary"
+          :disabled="source === null"
+          @click="startIndex"
+        >
+          建立索引
+        </button>
+        <button v-else class="button" @click="stopIndex">停止</button>
+      </div>
+      <p v-if="progressText !== ''" class="status">{{ progressText }}</p>
+      <p v-if="notice !== null" class="warn">{{ notice }}</p>
+    </section>
+
+    <section class="card">
+      <h2 class="card__title">检索</h2>
+      <form class="row" @submit.prevent="runSearch">
+        <input
+          v-model="query"
+          class="input"
+          type="search"
+          placeholder="例如：雪地里的狗 / 夜晚的城市"
+          :disabled="searching"
+        />
+        <button
+          class="button button--primary"
+          type="submit"
+          :disabled="searching || query.trim() === ''"
+        >
+          {{ searching ? '检索中…' : '找照片' }}
+        </button>
+      </form>
+      <p v-if="searchNote !== null" class="status">{{ searchNote }}</p>
+      <ul class="results">
+        <li v-for="hit in hits" :key="hit.photoId" class="result">
+          <img
+            v-if="hit.thumbKey !== null && thumbs[hit.thumbKey] !== undefined"
+            class="result__thumb"
+            :src="thumbs[hit.thumbKey]"
+            :alt="hit.relPath"
+            loading="lazy"
+          />
+          <div v-else class="result__thumb result__thumb--empty" />
+          <div class="result__meta">
+            <span class="result__path">{{ hit.relPath }}</span>
+            <span class="result__score">{{ hit.score.toFixed(3) }}</span>
+          </div>
+        </li>
+      </ul>
+    </section>
   </main>
 </template>
 
@@ -57,14 +344,109 @@ onMounted(async () => {
   line-height: 1.7;
 }
 
+.card {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.card__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button--primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.input {
+  flex: 1 1 16rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--text);
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+}
+
+.hint,
 .status {
   margin: 0;
   color: var(--text-dim);
   font-size: 0.875rem;
-  line-height: 1.7;
+  line-height: 1.6;
 }
 
-.status code {
-  color: var(--text);
+.warn {
+  margin: 0;
+  color: var(--warn, #ffb020);
+  font-size: 0.875rem;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.75rem;
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.result__thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.result__thumb--empty {
+  border: 1px dashed var(--border);
+}
+
+.result__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.result__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
