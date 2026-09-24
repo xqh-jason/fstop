@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fstop · 拆塔方案 C spike</title>
+    <style>
+      body {
+        background: #0e0e11;
+        color: #ececf1;
+        font:
+          12px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        margin: 0;
+        padding: 24px;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>拆塔方案 C spike（交接说明 §9A3）</h1>
+    <p>
+      底层 ORT session + `session.run(feeds, ['image_embeds'])` 指定输出列表 ——
+      验证 ORT 是否真的只算目标塔。参数：<code>model</code> / <code>dtype</code> /
+      <code>runs</code>。结果写入 <code>window.__TOWER_RESULT</code>。
+    </p>
+    <pre id="out">starting…</pre>
+    <script type="module" src="/bench/towers.ts"></script>
+  </body>
+</html>

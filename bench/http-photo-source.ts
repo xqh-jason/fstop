@@ -27,18 +27,24 @@ export class HttpPhotoSource implements PhotoSource {
   private constructor(
     readonly rootId: string,
     private readonly baseUrl: string,
+    private readonly basePath: string,
     entries: readonly CorpusEntry[],
   ) {
     for (const entry of entries) this.entries.set(entry.file, entry)
   }
 
-  /** 从 dev server 读取语料清单；`limit` 用于分块跑 */
-  static async open(rootId: string, baseUrl: string, limit: number): Promise<HttpPhotoSource> {
-    const response = await fetch(`${baseUrl}/bench/corpus/manifest.json`)
+  /** 从 dev server 读取清单；`limit` 用于分块跑，`basePath` 缺省为真实语料，检索质量页用 `samples` */
+  static async open(
+    rootId: string,
+    baseUrl: string,
+    limit: number,
+    basePath = 'bench/corpus',
+  ): Promise<HttpPhotoSource> {
+    const response = await fetch(`${baseUrl}/${basePath}/manifest.json`)
     if (!response.ok) throw new Error(`语料清单不可读：HTTP ${response.status}`)
     const manifest = (await response.json()) as CorpusEntry[]
     const entries = limit > 0 ? manifest.slice(0, limit) : manifest
-    return new HttpPhotoSource(rootId, baseUrl, entries)
+    return new HttpPhotoSource(rootId, baseUrl, basePath, entries)
   }
 
   get count(): number {
@@ -56,7 +62,9 @@ export class HttpPhotoSource implements PhotoSource {
   }
 
   async read(ref: PhotoRef): Promise<Blob> {
-    const response = await fetch(`${this.baseUrl}/bench/corpus/${encodeURIComponent(ref.relPath)}`)
+    const response = await fetch(
+      `${this.baseUrl}/${this.basePath}/${encodeURIComponent(ref.relPath)}`,
+    )
     if (!response.ok) throw new Error(`读取失败 ${ref.relPath}：HTTP ${response.status}`)
     return response.blob()
   }

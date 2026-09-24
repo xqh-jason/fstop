@@ -1,0 +1,130 @@
+[
+  {
+    "id": "beach-sunset",
+    "match": "beach-sunset",
+    "zh": "海边的日落",
+    "en": "a sunset over the sea at the beach"
+  },
+  {
+    "id": "road-in-forest",
+    "match": "bicycle-street-01",
+    "zh": "穿过树林的公路",
+    "en": "an empty paved road through the forest"
+  },
+  {
+    "id": "bicycle-sign",
+    "match": "bicycle-street-02",
+    "zh": "蓝色的自行车道路指示牌",
+    "en": "a blue bicycle street traffic sign"
+  },
+  {
+    "id": "swans-mountain-lake",
+    "match": "bird-water-01",
+    "zh": "湖面上游着两只天鹅，远处是雪山",
+    "en": "two swans swimming on a lake with a snow capped mountain behind"
+  },
+  {
+    "id": "cargo-ship-sunset",
+    "match": "bird-water-02",
+    "zh": "日落时海面上的大货轮",
+    "en": "a large cargo ship on the sea at sunset"
+  },
+  {
+    "id": "boats-harbor",
+    "match": "boat-harbor",
+    "zh": "港口里停泊的船",
+    "en": "boats moored at a harbor"
+  },
+  {
+    "id": "calligraphy-page",
+    "match": "book-page",
+    "zh": "书页上的书法字迹",
+    "en": "a page of calligraphy from an old book"
+  },
+  {
+    "id": "vintage-car",
+    "match": "car-vintage-01",
+    "zh": "停在路边的老式轿车",
+    "en": "an old vintage car parked on the street"
+  },
+  {
+    "id": "vintage-motorbikes",
+    "match": "car-vintage-02",
+    "zh": "一排老式摩托车",
+    "en": "a row of vintage motorcycles"
+  },
+  { "id": "cats-indoor", "match": "cat-indoor", "zh": "待在室内的猫", "en": "cats indoors" },
+  {
+    "id": "playground",
+    "match": "child-playground",
+    "zh": "儿童游乐场",
+    "en": "a children's playground"
+  },
+  {
+    "id": "city-lights-night",
+    "match": "city-skyline",
+    "zh": "夜晚亮灯的城市建筑",
+    "en": "city buildings illuminated at night"
+  },
+  {
+    "id": "coffee-breakfast",
+    "match": "coffee-breakfast",
+    "zh": "餐桌上的咖啡和面包早餐",
+    "en": "breakfast with coffee and bread on the table"
+  },
+  { "id": "dog-in-snow", "match": "dog-snow", "zh": "雪地里的狗", "en": "a dog in the snow" },
+  {
+    "id": "path-in-forest",
+    "match": "forest-path",
+    "zh": "树林里的小路",
+    "en": "a path through the forest"
+  },
+  {
+    "id": "bass-guitar",
+    "match": "guitar-music",
+    "zh": "电贝斯吉他",
+    "en": "an electric bass guitar"
+  },
+  {
+    "id": "typing-keyboard",
+    "match": "keyboard-desk",
+    "zh": "在电脑键盘上打字的手",
+    "en": "hands typing on a keyboard at a desk"
+  },
+  {
+    "id": "mountain-sunrise",
+    "match": "mountain-sunrise",
+    "zh": "日出时层叠的远山",
+    "en": "mountain landscape at sunrise"
+  },
+  {
+    "id": "red-flower",
+    "match": "red-flower",
+    "zh": "红色花朵的特写",
+    "en": "a closeup of a red flower"
+  },
+  {
+    "id": "stars-night-sky",
+    "match": "star-night",
+    "zh": "夜空中的星星",
+    "en": "stars in the night sky"
+  },
+  {
+    "id": "street-food-market",
+    "match": "street-food",
+    "zh": "街边菜市场的小吃摊",
+    "en": "a street food market"
+  },
+  {
+    "id": "hindu-temple",
+    "match": "temple-architecture",
+    "zh": "古老的印度教神庙",
+    "en": "an ancient hindu temple"
+  },
+  {
+    "id": "train-platform",
+    "match": "train-station",
+    "zh": "火车站的站台",
+    "en": "a train station platform"
+  }
+]

@@ -15,6 +15,8 @@
  *   pnpm bench -- --corpus bench/corpus         # 真实照片语料（目录）
  *   pnpm bench -- --headed --count 200          # 有头 + 限量
  *   pnpm bench -- --model Xenova/clip-vit-base-patch32 --dtype q4f16
+ *   pnpm bench -- --query                       # 检索延迟（§八 ≤ 300 ms）
+ *   pnpm bench -- --quality                     # 检索质量（中文 query 命中率，M0 收口 §A2）
  */
 
 import { spawn } from 'node:child_process'
@@ -45,6 +47,10 @@ const SOURCE = args.includes('--source')
     : 'files'
 /** `--query`：跑检索延迟页（§八 ≤ 300 ms），不建索引 */
 const QUERY_MODE = args.includes('--query')
+/** `--quality`：跑检索质量页（M0 收口 §9A2 中文 query 命中率），样例库即检索库 */
+const QUALITY_MODE = args.includes('--quality')
+/** `--towers`：跑拆塔方案 C spike（§9A3：ORT 指定输出列表是否真能剪掉另一塔） */
+const TOWERS_MODE = args.includes('--towers')
 
 /** @param {string} url @param {number} timeoutMs */
 async function waitForServer(url, timeoutMs) {
@@ -119,14 +125,28 @@ async function main() {
       limit: String(Number(arg('limit', '0'))),
       vfs: `fstop-vfs-bench-${Date.now()}`,
     })
-    const pagePath = QUERY_MODE ? 'bench/query.html' : 'bench/run.html'
-    const resultKey = QUERY_MODE ? 'window.__QUERY_RESULT' : 'window.__BENCH_RESULT'
+    const pagePath = TOWERS_MODE
+      ? 'bench/towers.html'
+      : QUALITY_MODE
+        ? 'bench/quality.html'
+        : QUERY_MODE
+          ? 'bench/query.html'
+          : 'bench/run.html'
+    const resultKey = TOWERS_MODE
+      ? 'window.__TOWER_RESULT'
+      : QUALITY_MODE
+        ? 'window.__QUALITY_RESULT'
+        : QUERY_MODE
+          ? 'window.__QUERY_RESULT'
+          : 'window.__BENCH_RESULT'
     await page.goto(`${base}/${pagePath}?${query.toString()}`, { waitUntil: 'domcontentloaded' })
+    page.on('pageerror', (error) => console.log(`[pageerror] ${error.message}`))
 
-    if (CORPUS !== null && !QUERY_MODE) {
-      // Playwright 对 `<input webkitdirectory>` 只接受**目录**（传文件数组会直接报错），
-      // 而目录里的**软链会被 Chrome 静默忽略**（实测 files.length 恒为 0）。
-      // 因此 `--limit N` 用「硬链接子集目录」实现：不复制字节、也不触发软链问题。
+    if (CORPUS !== null && !QUERY_MODE && !QUALITY_MODE && !TOWERS_MODE) {
+      // Playwright 对 `<input webkitdirectory>` 只接受**目录**（传文件数组会直接报错）。
+      // 目录里的**软链会被 Chromium 逐项静默过滤**（安全机制；混合目录只丢软链项，
+      // 实测 files-probe 四形态对照），因此 `--limit N` 用「硬链接子集目录」实现：
+      // 不复制字节、也不触发软链过滤。
       const limit = Number(arg('limit', '0'))
       if (limit > 0) {
         const manifest = JSON.parse(await readFile(path.join(CORPUS, 'manifest.json'), 'utf8'))
@@ -146,9 +166,13 @@ async function main() {
 
     // 就绪条件必须等**终态字段**：页面一开始就会渲染 `{phase}` 这类中间态，
     // 只等「结果存在」会立刻返回中间态（实测两次踩到）
-    const ready = QUERY_MODE
-      ? `${resultKey} !== undefined && ${resultKey}.textEmbedMs !== undefined`
-      : `${resultKey} !== undefined && ${resultKey}.photosPerSecond !== undefined`
+    const ready = TOWERS_MODE
+      ? `${resultKey} !== undefined && ${resultKey}.prunedImageMs !== undefined`
+      : QUALITY_MODE
+        ? `${resultKey} !== undefined && ${resultKey}.metrics !== undefined`
+        : QUERY_MODE
+          ? `${resultKey} !== undefined && ${resultKey}.textEmbedMs !== undefined`
+          : `${resultKey} !== undefined && ${resultKey}.photosPerSecond !== undefined`
     // 等待期间每 20 s 汇报一次页面状态：卡住时能直接看到页面停在哪
     const heartbeat = setInterval(async () => {
       const snapshot = await page
@@ -173,7 +197,13 @@ async function main() {
       ...result,
     }
     await mkdir(path.join('bench', 'results'), { recursive: true })
-    const prefix = QUERY_MODE ? 'query' : 'index'
+    const prefix = TOWERS_MODE
+      ? 'towers'
+      : QUALITY_MODE
+        ? 'quality'
+        : QUERY_MODE
+          ? 'query'
+          : 'index'
     const file = path.join(
       'bench',
       'results',
@@ -183,7 +213,26 @@ async function main() {
 
     console.log(`\n浏览器：${userAgent}`)
     console.log(`模型：${MODEL} [${DTYPE}]`)
-    if (QUERY_MODE) {
+    if (TOWERS_MODE) {
+      console.log(
+        `全输出 run（现状）：${result.fullImageMs} ms；指定 ['image_embeds']：${result.prunedImageMs} ms（${result.prunedSpeedup}×）`,
+      )
+      console.log(
+        `剪枝文本塔：${result.prunedTextMs} ms；只喂单侧输入：${JSON.stringify(result.omitOtherInputs)}`,
+      )
+      console.log(
+        `一致性：image_embeds 余弦 ${result.imageEmbedsCosine}；文本烟雾 ${result.textSmokeDifferentVectors ? '通过' : '失败'}`,
+      )
+    } else if (QUALITY_MODE) {
+      console.log(`样例库：${result.samples} 张，query ${result.queries} 条 × 中英双语`)
+      for (const lang of ['zh', 'en']) {
+        const m = result.metrics[lang]
+        if (m === undefined) continue
+        console.log(
+          `[${lang}] R@1 ${(m.recallAt1 * 100).toFixed(1)}%  R@5 ${(m.recallAt5 * 100).toFixed(1)}%  R@10 ${(m.recallAt10 * 100).toFixed(1)}%  MRR ${m.mrr}`,
+        )
+      }
+    } else if (QUERY_MODE) {
       console.log(`索引规模：${result.vectors} 条 × ${result.dim} 维`)
       console.log(`文本向量化中位：${result.textEmbedMs.median} ms`)
       console.log(`暴力余弦 top-50 中位：${result.vectorSearchMs.median} ms`)

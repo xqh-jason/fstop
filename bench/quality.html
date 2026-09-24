@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fstop · 检索质量</title>
+    <style>
+      body {
+        background: #0e0e11;
+        color: #ececf1;
+        font:
+          12px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        margin: 0;
+        padding: 24px;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>检索质量（中文 query 命中率 · M0 收口 §9A2）</h1>
+    <p>
+      39 张 CC0 样例 → 图像向量；23 条中英 query → Recall@1/5/10 与 MRR。 参数：<code>model</code> /
+      <code>dtype</code>。结果写入 <code>window.__QUALITY_RESULT</code>。
+    </p>
+    <pre id="out">starting…</pre>
+    <script type="module" src="/bench/quality.ts"></script>
+  </body>
+</html>
