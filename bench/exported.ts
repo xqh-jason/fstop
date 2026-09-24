@@ -34,6 +34,7 @@ import {
 import { DEFAULT_DECODE_OPTIONS, decodePhoto } from '../src/workers/decode'
 import { HttpPhotoSource } from './http-photo-source'
 import qualityQueries from './quality-queries.json'
+import corpusQueries from './corpus-queries.json'
 
 const params = new URLSearchParams(location.search)
 const MODEL_ID = params.get('model') ?? DEFAULT_MODEL_ID
@@ -59,7 +60,7 @@ interface OrtSessions {
 
 interface QualityQuery {
   readonly id: string
-  readonly match: string
+  readonly match: string | readonly string[]
   readonly zh: string
   readonly en: string
 }
@@ -131,8 +132,12 @@ async function main(): Promise<void> {
   ) => Record<string, unknown>
 
   const base = '/bench/export'
-  /** 分辨率档：token = (size/16)²+1 —— 与 bench/export-towers.py 的 --sizes 对应 */
-  const SIZES = [224, 160, 112, 64] as const
+  /** 分辨率档：token = (size/16)²+1 —— 与 bench/export-towers.py 的 --sizes 对应；
+   *  `?sizes=224,192,176,160` 可换成任意已导出的档位（找质量拐点时用） */
+  const SIZES = (params.get('sizes') || '224,160,112,64')
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value) && value > 0)
   const tokensOf = (size: number): number => (size / 16) ** 2 + 1
   render({ phase: 'load:exports', sizes: SIZES, dtype: DTYPE })
   const visionSessions = new Map<number, OrtSession>()
@@ -321,18 +326,35 @@ async function main(): Promise<void> {
   }
   console.log(`拟合 ${JSON.stringify(fit)}；跨分辨率余弦 ${JSON.stringify(crossResolutionCosine)}`)
 
-  // ── 3) 质量：39 张样例建两个矩阵（224² / 112²），23 条中文 query 走同一套 ground truth ──
+  // ── 3) 质量：图库内每张照片建一个矩阵（各分辨率各一份），query 走同一套 ground truth ──
+  //    默认是 39 张样例库 + 23 条 query（M0 那套，可与 §7 直接对照）；
+  //    `?queries=corpus&gallery=bench/corpus` 换成 783 张真实语料 + 106 条 query
+  //    （query 由 Commons 上传者写的英文标题转写，未看图，见 bench/corpus-queries.json）
   render({ phase: 'quality', runs: RUNS })
-  const queries = qualityQueries as readonly QualityQuery[]
-  const source = await HttpPhotoSource.open('samples', location.origin, 0, 'samples')
+  const QUERY_SET = params.get('queries') ?? 'samples'
+  const queries = (
+    QUERY_SET === 'corpus' ? corpusQueries : qualityQueries
+  ) as readonly QualityQuery[]
+  const gallery = params.get('gallery') || (QUERY_SET === 'corpus' ? 'bench/corpus' : 'samples')
+  const source = await HttpPhotoSource.open(gallery, location.origin, 0, gallery)
   const refs: PhotoRef[] = []
   for await (const ref of source.list()) refs.push(ref)
   const subset = LIMIT > 0 ? refs.slice(0, LIMIT) : refs
+  /** `match` 可以是前缀（老格式）或精确文件名数组（新格式，含扩展名时按精确匹配） */
+  const matchesOf = (match: string | readonly string[]): readonly string[] =>
+    typeof match === 'string' ? [match] : match
   const targetsOf = queries.map((query) => {
+    const patterns = matchesOf(query.match)
     const targets = refs
       .map((ref) => ref.relPath)
-      .filter((file) => file.startsWith(`${query.match}-`))
-    if (targets.length === 0) throw new Error(`query ${query.id} 的 match 前缀没有命中任何样例`)
+      .filter((file) =>
+        patterns.some((pattern) =>
+          /\.(jpe?g|png|webp|tiff?)$/i.test(pattern)
+            ? file === pattern
+            : file.startsWith(`${pattern}-`),
+        ),
+      )
+    if (targets.length === 0) throw new Error(`query ${query.id} 的 match 没有命中任何照片`)
     return targets
   })
 

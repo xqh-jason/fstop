@@ -265,14 +265,23 @@ def main() -> None:
     record(text, "文本塔整塔")
 
     manifest_path = OUT_DIR / ("manifest.json" if suffix == "q4f16" else f"manifest_{suffix}.json")
+    # 与既有清单**合并**（按文件名去重）而不是覆盖：分次导出不同分辨率时，
+    # 先前那批产物的 sha256 必须留着（同 fetch-models 的教训）
+    previous = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"derived": []}
+    fresh = {entry["file"] for entry in manifest}
+    derived = [
+        *(entry for entry in previous.get("derived", []) if entry.get("file") not in fresh),
+        *manifest,
+    ]
+    derived.sort(key=lambda entry: entry["file"])
     manifest_path.write_text(
         json.dumps(
             {
                 "source": str(source.relative_to(ROOT)),
                 "source_sha256": sha256(source),
                 "source_bytes": source.stat().st_size,
-                "derived": manifest,
-                "note": "派生产物，不入库；由 bench/export-towers.py 生成",
+                "derived": derived,
+                "note": "派生产物，不入库；由 bench/export-towers.py 生成（分次导出会合并，不覆盖）",
             },
             ensure_ascii=False,
             indent=2,

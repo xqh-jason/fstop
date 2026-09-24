@@ -46,11 +46,17 @@ and the single-image cost is **~97% vision tower** — the "wasted text tower" t
 The M1 decision is now settled, and it is **not** a cheaper backbone. The resolution lock turned out to be three
 constants (a `[1,197,768]` positional embedding, 96 Reshape constants, plus 667 stale `value_info` shape
 annotations that `extract_model` copies along), and rewriting all three makes the same weights run at any
-`(n²+1)` token count. Re-exporting the **vision tower at 160² (101 tokens)** costs 40 ms/photo instead of 62 ms,
-keeps Chinese R@1 at 100%, extrapolates 10k photos to **~7–8 min (sprint line crossed)**, and shrinks the
-first-load download from 131.8 MB to 47.4 MB (the text tower, 77.9 MB, can lazy-load on first query).
-Text queries also drop from 78 ms to ~27 ms. A dtype comparison (same page, same inputs, one variable) shows
-**fp16 is 13–16% faster than q4f16** (33 vs 38 ms at 160²) but 3.5× the bytes, so q4f16 stays the default.
+`(n²+1)` token count. Re-exporting the vision tower as a **192² (145-token) single tower** extrapolates 10k
+photos to **~9.7 min (sprint line)**, shrinks the first-load download from 131.8 MB to 47.5 MB (the text tower,
+77.9 MB, can lazy-load on first query), and drops text queries from 78 ms to ~27 ms.
+
+Which resolution, and why not the cheaper one: on the 39-photo sample set **160²** looked free (R@1 still
+100%), but that sample cannot tell 100% from 87%. Re-running on a **783-photo gallery with 106 Chinese queries**
+(queries transcribed from the Commons uploaders' own titles, never from looking at the images) shows 160²
+loses **−9.4 pp R@1 (p = 0.021)**, while 208²/192²/176² are statistically indistinguishable from 224²
+(p = 0.51/0.34/0.15) — so **192² is the largest reduction whose quality loss is not measurable**, and 160²
+stays available as a fast mode. A dtype comparison (same page, same inputs, one variable) shows **fp16 is
+13–16% faster than q4f16** but 3.5× the bytes, so q4f16 stays the default.
 Details: `docs/Fstop-光圈-M0-实测记录.md` §9.
 
 Documents, in reading order:

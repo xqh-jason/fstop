@@ -138,6 +138,9 @@ async function main() {
       source: SOURCE,
       limit: String(Number(arg('limit', '0'))),
       fidelity: arg('fidelity', '1'),
+      queries: arg('queries', 'samples'),
+      gallery: arg('gallery', ''),
+      sizes: arg('sizes', ''),
       vfs: `fstop-vfs-bench-${Date.now()}`,
     })
     const pagePath = EXPORTED_MODE
