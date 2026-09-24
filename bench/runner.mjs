@@ -38,6 +38,8 @@ const MODEL = arg('model', 'Xenova/chinese-clip-vit-base-patch16')
 const DTYPE = arg('dtype', 'q4f16')
 const HEADED = args.includes('--headed')
 const SOURCE = CORPUS === null ? 'opfs' : 'files'
+/** `--query`：跑检索延迟页（§八 ≤ 300 ms），不建索引 */
+const QUERY_MODE = args.includes('--query')
 
 /** @param {string} url @param {number} timeoutMs */
 async function waitForServer(url, timeoutMs) {
@@ -57,16 +59,36 @@ async function waitForServer(url, timeoutMs) {
 async function main() {
   const server = spawn(
     process.execPath,
-    [path.join('node_modules', 'vite', 'bin', 'vite.js'), '--port', String(PORT), '--strictPort'],
+    [
+      path.join('node_modules', 'vite', 'bin', 'vite.js'),
+      '--port',
+      String(PORT),
+      '--strictPort',
+      // 必须钉死 IPv4：Vite 默认只监听 ::1，而 Node 的 `localhost` 可能解析到 127.0.0.1，
+      // 于是就绪探测永远连不上（实测踩过：curl 对 127.0.0.1 返回 000、对 [::1] 返回 200）
+      '--host',
+      '127.0.0.1',
+    ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   )
-  const base = `http://localhost:${PORT}`
+  // 输出必须接出来：否则 Vite 的报错只会在管道里堆着，失败时无从诊断
+  server.stdout.on('data', (chunk) => process.stdout.write(`[vite] ${chunk}`))
+  server.stderr.on('data', (chunk) => process.stderr.write(`[vite] ${chunk}`))
+  const base = `http://127.0.0.1:${PORT}`
 
   try {
-    await waitForServer(`${base}/bench/run.html`, 60_000)
+    await waitForServer(`${base}/bench/run.html`, 120_000)
 
-    const browser = await chromium.launch({ channel: 'chrome', headless: !HEADED })
-    const page = await browser.newPage()
+    // 用**持久化 profile**：Playwright 默认每次启动都是全新临时 profile，
+    // 于是每跑一次基准都要重新下载 131.8 MB 权重（实测把一轮 40 张的基准拖成十分钟以上）。
+    // 持久化后 Cache Storage 跨轮复用，权重只下一次。
+    const profileDir = path.resolve('.cache', 'bench-profile')
+    await mkdir(profileDir, { recursive: true })
+    const context = await chromium.launchPersistentContext(profileDir, {
+      channel: 'chrome',
+      headless: !HEADED,
+    })
+    const page = context.pages()[0] ?? (await context.newPage())
     const consoleErrors = []
     page.on('pageerror', (error) => consoleErrors.push(String(error)))
 
@@ -78,17 +100,23 @@ async function main() {
       source: SOURCE,
       vfs: `fstop-vfs-bench-${Date.now()}`,
     })
-    await page.goto(`${base}/bench/run.html?${query.toString()}`, { waitUntil: 'domcontentloaded' })
+    const pagePath = QUERY_MODE ? 'bench/query.html' : 'bench/run.html'
+    const resultKey = QUERY_MODE ? 'window.__QUERY_RESULT' : 'window.__BENCH_RESULT'
+    await page.goto(`${base}/${pagePath}?${query.toString()}`, { waitUntil: 'domcontentloaded' })
 
-    if (CORPUS !== null) {
+    if (CORPUS !== null && !QUERY_MODE) {
       // Playwright 支持给 webkitdirectory 输入直接塞目录
       await page.setInputFiles('#corpus', path.resolve(CORPUS))
     }
 
-    await page.waitForFunction('window.__BENCH_RESULT && window.__BENCH_RESULT.photosPerSecond', {
-      timeout: 60 * 60 * 1000,
-    })
-    const result = await page.evaluate('window.__BENCH_RESULT')
+    // 索引模式必须等**终态**（有 photosPerSecond），否则会在第一个 phase 渲染时就返回；
+    // 检索模式没有 photosPerSecond，只能等结果对象出现。
+    const ready = QUERY_MODE
+      ? `${resultKey} !== undefined`
+      : `${resultKey} !== undefined && ${resultKey}.photosPerSecond !== undefined`
+    // 注意 waitForFunction 的第二个参数是 arg、第三个才是 options：写错位置会静默用 30 s 默认超时
+    await page.waitForFunction(ready, undefined, { timeout: 60 * 60 * 1000 })
+    const result = await page.evaluate(resultKey)
     const userAgent = await page.evaluate('navigator.userAgent')
 
     const payload = {
@@ -98,26 +126,37 @@ async function main() {
       ...result,
     }
     await mkdir(path.join('bench', 'results'), { recursive: true })
+    const prefix = QUERY_MODE ? 'query' : 'index'
     const file = path.join(
       'bench',
       'results',
-      `${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+      `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
     )
     await writeFile(file, `${JSON.stringify(payload, null, 2)}\n`)
 
     console.log(`\n浏览器：${userAgent}`)
-    console.log(`模型：${MODEL} [${DTYPE}]  dualTower=${result.model.dualTower}`)
-    console.log(`语料：${JSON.stringify(result.corpus)}`)
-    console.log(`照片数：${result.photos}  解码并发：${result.decodeConcurrency}`)
-    console.log(
-      `端到端：${result.indexSeconds} s → ${result.photosPerSecond} photos/s（1 万张外推 ${result.projected10kMinutes} 分钟）`,
-    )
-    console.log(`分阶段中位（ms）：${JSON.stringify(result.perStageMedianMs)}`)
-    console.log(`入库：${JSON.stringify(result.dbStats)}  向量槽位：${result.vectorSlots}`)
+    console.log(`模型：${MODEL} [${DTYPE}]`)
+    if (QUERY_MODE) {
+      console.log(`索引规模：${result.vectors} 条 × ${result.dim} 维`)
+      console.log(`文本向量化中位：${result.textEmbedMs.median} ms`)
+      console.log(`暴力余弦 top-50 中位：${result.vectorSearchMs.median} ms`)
+      console.log(
+        `检索总延迟中位：${result.totalMedianMs} ms  ${result.withinBudget ? '✓ 在 300 ms 预算内' : '✗ 超出 300 ms 预算'}`,
+      )
+    } else {
+      console.log(`dualTower=${result.model.dualTower}`)
+      console.log(`语料：${JSON.stringify(result.corpus)}`)
+      console.log(`照片数：${result.photos}  解码并发：${result.decodeConcurrency}`)
+      console.log(
+        `端到端：${result.indexSeconds} s → ${result.photosPerSecond} photos/s（1 万张外推 ${result.projected10kMinutes} 分钟）`,
+      )
+      console.log(`分阶段中位（ms）：${JSON.stringify(result.perStageMedianMs)}`)
+      console.log(`入库：${JSON.stringify(result.dbStats)}  向量槽位：${result.vectorSlots}`)
+    }
     console.log(`结果 → ${file}`)
     if (consoleErrors.length > 0) console.error(`页面错误：${consoleErrors.join(' | ')}`)
 
-    await browser.close()
+    await context.close()
   } finally {
     server.kill('SIGTERM')
   }

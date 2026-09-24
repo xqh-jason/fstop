@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fstop · 检索延迟</title>
+    <style>
+      body {
+        background: #0e0e11;
+        color: #ececf1;
+        font:
+          12px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        margin: 0;
+        padding: 24px;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>检索延迟（§八 ≤ 300 ms）</h1>
+    <p>
+      参数：<code>model</code> / <code>dtype</code> / <code>vectors</code> / <code>runs</code>。
+      结果写入 <code>window.__QUERY_RESULT</code>。
+    </p>
+    <pre id="out">starting…</pre>
+    <script type="module" src="/bench/query.ts"></script>
+  </body>
+</html>

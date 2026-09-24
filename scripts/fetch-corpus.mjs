@@ -26,12 +26,19 @@ const OUTPUT_DIR = path.join(process.cwd(), 'bench', 'corpus')
 const LOCAL_MANIFEST = path.join(OUTPUT_DIR, 'manifest.json')
 const COMMITTED_MANIFEST = path.join(process.cwd(), 'bench', 'corpus-manifest.json')
 
-/** 目标宽度档位与占比：6 MP / 10.7 MP / 24 MP，覆盖旧图到现代相机 */
+/**
+ * 目标档位与占比。宽度必须是 Wikimedia 缩略图服务**已验证可服务**的档位：
+ * 实测 1280 / 1920 / 3840 返回 200，而 2000 / 2560 直接 400 —— 任意宽度已经不被接受。
+ * 第三档直接用**原图**，这才是真实相机 JPEG 的体积（3–10 MB），是校正合成语料偏差的关键。
+ */
 const WIDTH_BUCKETS = [
-  { width: 2000, share: 0.2 },
-  { width: 4000, share: 0.6 },
-  { width: 6000, share: 0.2 },
+  { kind: 'thumb', width: 1920, share: 0.2 },
+  { kind: 'thumb', width: 3840, share: 0.6 },
+  { kind: 'original', width: 0, share: 0.2 },
 ]
+
+/** 原图档的上限：Commons 里不少原图是几十 MB 的 TIFF/PNG，那不是「照片库」的样子 */
+const MAX_ORIGINAL_BYTES = 12 * 1024 * 1024
 
 const ALLOWED_LICENSE = [/^cc0/i, /^public domain/i, /^pd[- ]/i]
 const ALLOWED_MIME = {
@@ -85,7 +92,7 @@ const TERMS = [
 ]
 
 /** @typedef {{ title: string, url: string, sourceWidth: number, sourceHeight: number, mime: string,
- *   license: string, licenseUrl: string, author: string, source: string }} Candidate */
+ *   sourceBytes: number, license: string, licenseUrl: string, author: string, source: string }} Candidate */
 /** @typedef {{ file: string, title: string, source: string, downloadUrl: string, author: string,
  *   license: string, licenseUrl: string, width: number, height: number, bytes: number, sha256: string }} Entry */
 
@@ -99,11 +106,19 @@ function stripHtml(value) {
 
 /** @param {URLSearchParams} params */
 async function callApi(params) {
-  const response = await fetch(`${API}?${params.toString()}`, {
-    headers: { 'User-Agent': USER_AGENT },
-  })
-  if (!response.ok) throw new Error(`Commons API ${response.status}`)
-  return response.json()
+  const url = `${API}?${params.toString()}`
+  let lastError
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
+      if (!response.ok) throw new Error(`Commons API ${response.status}`)
+      return await response.json()
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, 800 * attempt))
+    }
+  }
+  throw lastError
 }
 
 /** @param {string} term @param {number} offset @returns {Promise<Candidate[]>} */
@@ -117,7 +132,7 @@ async function search(term, offset) {
       gsrlimit: '50',
       gsroffset: String(offset),
       prop: 'imageinfo',
-      iiprop: 'url|extmetadata|size|mime',
+      iiprop: 'url|extmetadata|size|mime|metadata',
       format: 'json',
       formatversion: '2',
     }),
@@ -130,11 +145,19 @@ async function search(term, offset) {
     if (!ALLOWED_LICENSE.some((pattern) => pattern.test(license))) continue
     if (ALLOWED_MIME[info?.mime ?? ''] !== true) continue
     if (!info.url || (info.width ?? 0) < WIDTH_BUCKETS[0].width) continue
+    // 要**相机拍的照片**，不是博物馆扫描件：后者熵低、体积小，会把 read/decode 成本带偏。
+    // EXIF 里有相机型号是可靠信号（实测：不加这条过滤，候选会被 MET 的水彩扫描淹没）。
+    const hasCamera = (info.metadata ?? []).some(
+      (entry) => entry.name === 'Model' || entry.name === 'Make',
+    )
+    if (!hasCamera) continue
     candidates.push({
       title: page.title,
-      url: info.url,
+      // API 现在会给 url 附带 utm 查询串，直接拿它拼缩略图 URL 会 404
+      url: info.url.split('?')[0],
       sourceWidth: info.width,
       sourceHeight: info.height,
+      sourceBytes: info.size ?? 0,
       mime: info.mime,
       license,
       licenseUrl: stripHtml(meta.LicenseUrl?.value ?? ''),
@@ -145,50 +168,83 @@ async function search(term, offset) {
   return candidates
 }
 
-/** 由标题确定目标宽度：确定性，重跑结果一致 */
-function targetWidth(title, sourceWidth) {
+/** 由标题确定目标档位：确定性，重跑结果一致 */
+function targetBucket(title) {
   let hash = 0
   for (const char of title) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
   const roll = (hash % 1000) / 1000
   let cumulative = 0
   for (const bucket of WIDTH_BUCKETS) {
     cumulative += bucket.share
-    if (roll <= cumulative) return Math.min(bucket.width, sourceWidth)
+    if (roll <= cumulative) return bucket
   }
-  return Math.min(WIDTH_BUCKETS[WIDTH_BUCKETS.length - 1].width, sourceWidth)
+  return WIDTH_BUCKETS[WIDTH_BUCKETS.length - 1]
 }
 
-/** 缩略图 URL 自己拼：Commons 的 iiurlwidth 会忽略请求值（实测请求 640/800 都回 960px） */
-function thumbUrl(candidate, width) {
+/** Wikimedia 缩略图服务已验证可服务的宽度档（任意宽度会被 400 拒绝） */
+const THUMB_WIDTHS = [1280, 1920, 3840]
+
+/**
+ * 解析下载地址。返回首选、兜底与**实际目标宽度**：
+ * 原图比目标档窄时退到更小的可用档，再不行就用原图——不能静默跳过（否则候选会被大量浪费）。
+ */
+function resolveUrls(candidate, bucket) {
   const marker = '/commons/'
   const index = candidate.url.indexOf(marker)
-  if (index === -1) return null
-  const prefix = candidate.url.slice(0, index + marker.length)
-  const rest = candidate.url.slice(index + marker.length)
-  const filename = rest.split('/').pop()
-  if (filename === undefined) return null
-  return `${prefix}thumb/${rest}/${width}px-${filename}`
+  const thumbFor = (width) => {
+    if (index === -1 || width >= candidate.sourceWidth) return null
+    const prefix = candidate.url.slice(0, index + marker.length)
+    const rest = candidate.url.slice(index + marker.length)
+    const filename = rest.split('/').pop()
+    return filename === undefined ? null : `${prefix}thumb/${rest}/${width}px-${filename}`
+  }
+
+  const wanted = bucket.kind === 'original' ? candidate.sourceWidth : bucket.width
+  const usable = THUMB_WIDTHS.filter((width) => width <= Math.min(wanted, candidate.sourceWidth))
+  const chosen = usable.length === 0 ? null : usable[usable.length - 1]
+  const thumb = chosen === null ? null : thumbFor(chosen)
+
+  if (bucket.kind === 'original' && candidate.sourceBytes <= MAX_ORIGINAL_BYTES) {
+    return { primary: candidate.url, fallback: thumb, width: candidate.sourceWidth }
+  }
+  return {
+    primary: thumb ?? candidate.url,
+    fallback: candidate.url,
+    width: thumb === null ? candidate.sourceWidth : chosen,
+  }
 }
 
-function fileNameFor(title, width) {
+/**
+ * 文件名必须**唯一**：标题截断后 slug 会撞车（实测 381 条清单只落 350 个文件，
+ * 即两条不同标题指向同一个文件名、后者覆盖前者）。因此在结尾附上标题哈希。
+ */
+function fileNameFor(title, label) {
   const slug = title
     .replace(/^File:/, '')
     .replace(/\.[a-z0-9]+$/i, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 60)
-  return `${String(width).padStart(4, '0')}-${slug || 'photo'}.jpg`
+    .slice(0, 48)
+  let hash = 0
+  for (const char of title) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+  return `${label}-${slug || 'photo'}-${hash.toString(36).slice(0, 6)}.jpg`
 }
 
-/** 代理链路会偶发 ECONNRESET/SocketError，单张失败不该让整轮抓取作废 */
-async function download(url, attempts = 3) {
+/** 代理链路会偶发 ECONNRESET/SocketError；Wikimedia 在并发高时会限流，两者都要退避 */
+async function download(url, attempts = 4) {
   let lastError
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
-      if (!response.ok) return null
-      return Buffer.from(await response.arrayBuffer())
+      if (response.ok) return Buffer.from(await response.arrayBuffer())
+      // 429/403 是限流信号：退避后再试，不要当成「这张图不可用」
+      if (response.status === 429 || response.status === 403) {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt))
+        lastError = new Error(`HTTP ${response.status}`)
+        continue
+      }
+      return null
     } catch (error) {
       lastError = error
       await new Promise((resolve) => setTimeout(resolve, 500 * attempt))
@@ -206,21 +262,57 @@ async function main() {
   await mkdir(OUTPUT_DIR, { recursive: true })
 
   /** @type {Entry[]} */
-  let entries = []
+  let loaded = []
   try {
-    entries = JSON.parse(await readFile(LOCAL_MANIFEST, 'utf8'))
+    loaded = JSON.parse(await readFile(LOCAL_MANIFEST, 'utf8'))
   } catch {
-    entries = []
+    loaded = []
+  }
+  // 清单必须只描述**磁盘上真实存在**的文件：文件名碰撞等历史问题会让清单条目落空，
+  // 留着它们等于让语料「可复现」变成空话。
+  const entries = []
+  for (const entry of loaded) {
+    const file = await stat(path.join(OUTPUT_DIR, entry.file)).catch(() => null)
+    if (file?.isFile() === true) entries.push(entry)
+  }
+  if (entries.length !== loaded.length) {
+    console.warn(`清单里有 ${loaded.length - entries.length} 条没有对应文件，已剔除`)
   }
 
-  if (!verifyOnly && entries.length < target) {
+  if (verifyOnly) {
+    let checked = 0
+    let mismatched = 0
+    for (const entry of entries) {
+      const buffer = await readFile(path.join(OUTPUT_DIR, entry.file)).catch(() => null)
+      if (buffer === null) {
+        console.warn(`  ✗ 缺失：${entry.file}`)
+        mismatched += 1
+        continue
+      }
+      const digest = createHash('sha256').update(buffer).digest('hex')
+      if (digest !== entry.sha256) {
+        console.warn(`  ✗ sha256 不匹配：${entry.file}`)
+        mismatched += 1
+        continue
+      }
+      checked += 1
+    }
+    console.log(`校验 ${checked}/${entries.length} 张，异常 ${mismatched} 张`)
+    if (mismatched > 0) process.exitCode = 1
+    return
+  }
+
+  if (entries.length < target) {
     const seen = new Set(entries.map((entry) => entry.title))
     /** @type {Candidate[]} */
     const candidates = []
     for (const term of TERMS) {
       if (entries.length + candidates.length >= target * 1.4) break
-      for (const offset of [0, 50]) {
-        const found = await search(term, offset)
+      for (const offset of [0, 50, 100, 150]) {
+        const found = await search(term, offset).catch((error) => {
+          console.warn(`  ! 检索失败 ${term}@${offset}：${error.message}`)
+          return []
+        })
         for (const candidate of found) {
           if (seen.has(candidate.title)) continue
           seen.add(candidate.title)
@@ -237,32 +329,39 @@ async function main() {
       while (queue.length > 0 && entries.length < target) {
         const candidate = queue.shift()
         if (candidate === undefined) return
-        const width = targetWidth(candidate.title, candidate.sourceWidth)
-        const url = thumbUrl(candidate, width)
-        if (url === null) continue
-        const file = fileNameFor(candidate.title, width)
+        const bucket = targetBucket(candidate.title)
+        const plan = resolveUrls(candidate, bucket)
+        const file = fileNameFor(
+          candidate.title,
+          bucket.kind === 'original' ? 'orig' : String(plan.width),
+        )
         const existing = await stat(path.join(OUTPUT_DIR, file)).catch(() => null)
         if (existing?.isFile() === true && existing.size > 0) continue
 
-        const buffer = await download(url).catch((error) => {
-          console.warn(`  ! ${candidate.title}：${error.message}`)
-          return null
-        })
+        let usedUrl = plan.primary
+        let buffer = await download(plan.primary).catch(() => null)
+        if ((buffer === null || buffer.byteLength < 10_000) && plan.fallback !== null) {
+          buffer = await download(plan.fallback).catch(() => null)
+          usedUrl = plan.fallback
+        }
         if (buffer === null || buffer.byteLength < 10_000) {
           failures += 1
           continue
         }
         await writeFile(path.join(OUTPUT_DIR, file), buffer)
+        const isOriginal = usedUrl === candidate.url
+        const pixelWidth = isOriginal ? candidate.sourceWidth : plan.width
         entries.push({
           file,
           title: candidate.title,
           source: candidate.source,
-          downloadUrl: url,
+          downloadUrl: usedUrl,
           author: candidate.author,
           license: candidate.license,
           licenseUrl: candidate.licenseUrl,
-          width,
-          height: Math.round((width * candidate.sourceHeight) / candidate.sourceWidth),
+          // 原图档记录真实像素尺寸；缩略图档按目标宽度与原图比例推导
+          width: pixelWidth,
+          height: Math.round((pixelWidth * candidate.sourceHeight) / candidate.sourceWidth),
           bytes: buffer.byteLength,
           sha256: createHash('sha256').update(buffer).digest('hex'),
         })
