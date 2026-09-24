@@ -50,6 +50,7 @@ en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/*
 | `src/core/incremental-scan.ts` | ✅ M1 手写区 | **增量识别**：内容身份（`size` + 首尾 64 KB）、六种落点（新增/未变/重算/移动/恢复/删除）、三条安全规则（空扫描不毁库、移动要哈希唯一、同路径优先）；17 条单测 |
 | `src/core/content-hash.ts` | ✅ M1 手写区 | `content_hash`：只读首尾各 64 KB（小文件只切一次），`crypto.subtle` 出 SHA-256；**不读整图** |
 | `src/core/photo-files.ts` | ✅ M1 手写区 | 文件名规则：扩展名表（含 HEIC/HEIF/HIF/TIFF）、跳过目录、`/` 归一。**全项目只有这一份** |
+| `src/core/scan-apply.ts` | ✅ M1 手写区 | 把扫描计划落成 SQL：插入/移动/恢复/重算/标记删除 + 任务重排；**整段一个事务**、**移动两步法**（防链式改名撞唯一约束）、内容变了只把任务打回 pending 不删向量槽位；12 条单测 |
 | `src/storage/photo-source-fsa.ts` | ✅ M1 | `FileSystemAccessSource`：只持句柄不复制文件；递归遍历（带深度上限、单层失败只跳过该层）、`stat()` 顺带算内容哈希 |
 | `src/storage/migrations.ts` | ✅ | 手写迁移链 + 事务化 `applyMigrations`（失败整体回滚） |
 | `src/storage/models.ts` | ✅ | **全项目唯一允许联网的模块**；模型目录（含实测字节数、`towers` 字段）、运行时 env 配置 |
@@ -65,7 +66,7 @@ en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/*
 | `src/app`、`src/ui` | ✅ 壳 | 应用装配 + 能力面板；**检索 UI 未做** |
 | `bench/` | ✅ M0 级 | 探针、基准页、检索延迟页、**检索质量页（§9A2 已完成）**、Playwright 驱动器、合成语料、HTTP 语料源 |
 | `scripts/` | ✅ | 零外发检查、样例/权重/语料/HEIC 夹具脚本 |
-| `tests/unit/` | ✅ 86 项 | 用 `node:sqlite` 跑**真实建表与约束**（不是正则断言 SQL 文本）；含派生塔探测与 CHW 预处理 |
+| `tests/unit/` | ✅ 98 项 | 用 `node:sqlite` 跑**真实建表与约束**（不是正则断言 SQL 文本）；含派生塔探测与 CHW 预处理 |
 | `public/samples/` | ✅ | 39 张 CC0 样例图 + `manifest.json`（逐张来源/许可/sha256） |
 | 索引状态机 / 任务队列 | ❌ | 计划 §7.4 说属于 `src/core/`，**M1 第一件事** |
 | 缩略图墙 / 检索 UI / 人物页 | ❌ | M1 |
@@ -235,6 +236,7 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 | `transferToImageBitmap` 抛 `InvalidStateError`，整轮基准卡在 `load:models` 直到一小时超时 | 没有 2d context 的 `OffscreenCanvas` 不能 transfer | 已修：预热假图前先 `getContext('2d')` + `fillRect` |
 | 基准跑到一半页面空转（CPU 0.1%，无报错） | vite 发现**新依赖**（`onnxruntime-web`）要重新预打包 → 整页重载，基准状态丢失 | 已记入 §6：跑基准前先起一次 `pnpm dev` 预热 `node_modules/.vite/deps` |
 | 质量页报「query 没有命中任何照片」而 exported 页同样数据正常 | **两份 match 匹配逻辑**：quality 页只做前缀匹配，而 corpus query 的 `match` 是**含扩展名的完整文件名**（精确匹配） | 已修：抽成 `bench/query-targets.ts` 一处实现，两页共用。**同一语义不允许有第二份实现** |
+| 链式改名（a→b、b→c）在写库时撞 `UNIQUE(root_id, rel_path)` | 一次性把 `rel_path` 改成目标值，而目标值还被另一条记录占着 | 已修：移动分两步（先 `__moving__<id>` 再落目标），整段在一个事务里；两条记录互换路径同理 |
 | 端到端基准跑的通路与用户真实通路**悄悄分叉** | `photo-source-opfs.ts` 自己有一份扩展名表、且 `list()` 不递归；FSA 实现又要写一份 → 两份迟早对不上，而表现是「某些照片静默不被索引」 | 已修：扩展名/跳过规则抽到 `core/photo-files.ts`；OPFS 来源**委托给 FSA 实现**（同一个 DOM 接口），并因此让基准语料有了真实内容哈希 |
 | `pnpm test:coverage` **全局红**（57%），看起来像测试写得不够 | 阈值 `include` 写成了 `src/storage/**`，把浏览器专属模块（OPFS/sqlite-wasm）也算进去——它们 node 里 0%，于是门禁长期假红、没人当真 | 已修：范围收敛到 §5 约束写的那部分（`src/core/**` + `models.ts` + `migrations.ts`），并给 `models.ts` 补了纯函数测试；现在 97.3% / 86.7% |
 | 页面 `await main()` 抛错时驱动器白等满一小时 | runner 只认「页面把异常渲染成 `phase === 'error'`」，**未捕获**异常不走那条路（实测踩到：停在 `load:samples`） | 已修：runner 与 `pageerror` 竞速，未捕获异常立即失败并打印原文 |
