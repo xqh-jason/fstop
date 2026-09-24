@@ -62,6 +62,26 @@ export interface EmbedService {
 /** 输出名不一致（`image_embeds` / `text_embeds` / `pooler_output`），按优先级取第一个命中的 */
 const EMBEDDING_KEYS = ['image_embeds', 'text_embeds', 'pooler_output', 'embeddings'] as const
 
+/**
+ * 按模态选嵌入输出。
+ *
+ * ⚠ 这里的 preferred 不是装饰：双塔 ONNX 图（Chinese-CLIP）会同时输出 `image_embeds` 与
+ * `text_embeds`，若只按 EMBEDDING_KEYS 优先级取，文本查询会**永远命中 image_embeds**——
+ * 即「占位零图」的图像向量，所有 query 得到同一个常量向量、检索结果与文本完全无关
+ * （M0 质量页首跑抓到的真 bug：23 条 query 排名逐位相同）。
+ * 因此双塔路径必须显式指定模态；单塔/未知输出名才落回 firstEmbedding 的优先级兜底。
+ */
+function embeddingFor(
+  outputs: Record<string, unknown>,
+  preferred: 'image_embeds' | 'text_embeds',
+): TensorLike {
+  const preferredOutput = outputs[preferred]
+  if (preferredOutput !== undefined && preferredOutput !== null) {
+    return preferredOutput as TensorLike
+  }
+  return firstEmbedding(outputs)
+}
+
 /** 来自 `Xenova/chinese-clip-vit-base-patch16` 的 preprocessor_config.json（crop_size 224） */
 const IMAGE_SIZE = 224
 
@@ -150,13 +170,17 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
       dualTower: false,
       embedImage: async (bitmap) =>
         assertDim(
-          normalize(firstEmbedding(await callVision(await prepare(toRawImage(bitmap)))).data),
+          normalize(
+            embeddingFor(await callVision(await prepare(toRawImage(bitmap))), 'image_embeds').data,
+          ),
         ),
       embedText: async (input) =>
         assertDim(
           normalize(
-            firstEmbedding(await callText(encode([input], { padding: true, truncation: true })))
-              .data,
+            embeddingFor(
+              await callText(encode([input], { padding: true, truncation: true })),
+              'text_embeds',
+            ).data,
           ),
         ),
     }
@@ -186,12 +210,12 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
   const callImage = async (bitmap: ImageBitmap, fill: boolean): Promise<Float32Array> => {
     const inputs = await prepare(toRawImage(bitmap))
     const outputs = await run(fill ? { ...inputs, ...placeholderText() } : inputs)
-    return assertDim(normalize(firstEmbedding(outputs).data))
+    return assertDim(normalize(embeddingFor(outputs, 'image_embeds').data))
   }
   const callText = async (text: string, fill: boolean): Promise<Float32Array> => {
     const inputs = encode([text], { padding: true, truncation: true })
     const outputs = await run(fill ? { ...inputs, pixel_values: placeholderImage() } : inputs)
-    return assertDim(normalize(firstEmbedding(outputs).data))
+    return assertDim(normalize(embeddingFor(outputs, 'text_embeds').data))
   }
 
   // 用一次最小调用判定是否为「单文件双塔」：报缺输入即说明另一塔也在图里
