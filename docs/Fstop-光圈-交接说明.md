@@ -52,6 +52,12 @@ en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/*
 | `src/core/photo-files.ts` | ✅ M1 手写区 | 文件名规则：扩展名表（含 HEIC/HEIF/HIF/TIFF）、跳过目录、`/` 归一。**全项目只有这一份** |
 | `src/core/scan-apply.ts` | ✅ M1 手写区 | 把扫描计划落成 SQL：插入/移动/恢复/重算/标记删除 + 任务重排；**整段一个事务**、**移动两步法**（防链式改名撞唯一约束）、内容变了只把任务打回 pending 不删向量槽位；12 条单测 |
 | `src/storage/photo-source-fsa.ts` | ✅ M1 | `FileSystemAccessSource`：只持句柄不复制文件；递归遍历（带深度上限、单层失败只跳过该层）、`stat()` 顺带算内容哈希 |
+| `src/storage/folder-access.ts` | ✅ M1 | 文件夹授权与权限持久化：句柄存 IndexedDB、启动查 `queryPermission`、`prompt` 时由用户手势触发 `requestPermission`；用窄接口 + 能力检测（不同 TS 版本的 `lib.dom` 时有时无） |
+| `src/storage/vector-matrix.ts` | ✅ M1 | M0 只追加；M1 补：`open()` 按文件现有大小**接着写**（否则重开一次就覆盖已有向量，且不报错）、`writeAt()` 就地覆盖（重算写回同一槽位）、`snapshot()` 读出矩阵供检索 |
+| `src/app/index-runner.ts` | ✅ M1 | 编排：扫描 → 判断 → 落库 → 领批 → 逐条处理。读不到=重试、解不开=跳过，两类分开；缩略图用内容哈希命名 |
+| `src/app/search.ts` | ✅ M1 | 文本塔编码 → 矩阵余弦 → top-K；每次查询重读矩阵，换来「索引期间可检索」 |
+| `src/app/App.vue` | ✅ M1 | 产品外壳：选文件夹 / 建索引 / 进度 / 检索 + 缩略图墙。`?root=opfs` 走合成根，供端到端自动化 |
+| `bench/e2e-app.mjs` | ✅ M1 | 产品路径端到端（`node bench/e2e-app.mjs`）：播种 → 索引 → 三个查询 → 增量复扫 → **产品页零外发断言** |
 | `src/storage/migrations.ts` | ✅ | 手写迁移链 + 事务化 `applyMigrations`（失败整体回滚） |
 | `src/storage/models.ts` | ✅ | **全项目唯一允许联网的模块**；模型目录（含实测字节数、`towers` 字段）、运行时 env 配置 |
 | `src/storage/opfs.ts` | ✅ | OPFS 基础操作 |
@@ -239,6 +245,9 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 | 链式改名（a→b、b→c）在写库时撞 `UNIQUE(root_id, rel_path)` | 一次性把 `rel_path` 改成目标值，而目标值还被另一条记录占着 | 已修：移动分两步（先 `__moving__<id>` 再落目标），整段在一个事务里；两条记录互换路径同理 |
 | 端到端基准跑的通路与用户真实通路**悄悄分叉** | `photo-source-opfs.ts` 自己有一份扩展名表、且 `list()` 不递归；FSA 实现又要写一份 → 两份迟早对不上，而表现是「某些照片静默不被索引」 | 已修：扩展名/跳过规则抽到 `core/photo-files.ts`；OPFS 来源**委托给 FSA 实现**（同一个 DOM 接口），并因此让基准语料有了真实内容哈希 |
 | `pnpm test:coverage` **全局红**（57%），看起来像测试写得不够 | 阈值 `include` 写成了 `src/storage/**`，把浏览器专属模块（OPFS/sqlite-wasm）也算进去——它们 node 里 0%，于是门禁长期假红、没人当真 | 已修：范围收敛到 §5 约束写的那部分（`src/core/**` + `models.ts` + `migrations.ts`），并给 `models.ts` 补了纯函数测试；现在 97.3% / 86.7% |
+| `curl 127.0.0.1:5199` 返回 000，但端口明明在监听 | Vite 默认只监听 `::1`，而 `127.0.0.1` 是 IPv4；Node 与 curl 各自的 `localhost` 解析策略还不一样 | 起服务时钉 `--host 127.0.0.1`（基准与端到端脚本都已加），或访问 `localhost` 而非 `127.0.0.1` |
+| 同一浏览器第二个标签打开应用 → 界面显示「还没有可索引的文件夹」 | sqlite-wasm 的 `opfs-sahpool` VFS **每 origin 只允许一个实例**（§7.3 明文约束），第二个标签 `db.open()` 直接失败 | 待办：Web Locks 选主（已在 M1 清单里）；在那之前同一 profile 只开一个标签 |
+| 浏览器进程重启后 OPFS 里的语料全没了 | 自动化用的临时 profile 每次启动都是新的，OPFS 随之清空 | 端到端脚本用**持久 profile**（`.cache/bench-profile`）；表现上先看到「0 张可检索」而不是报错，容易误判成产品 bug |
 | 页面 `await main()` 抛错时驱动器白等满一小时 | runner 只认「页面把异常渲染成 `phase === 'error'`」，**未捕获**异常不走那条路（实测踩到：停在 `load:samples`） | 已修：runner 与 `pageerror` 竞速，未捕获异常立即失败并打印原文 |
 
 ## 9. 下一步
@@ -289,7 +298,16 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 
 ### C. M1 范围（按计划 §九）
 
-**已开工**：`src/core/index-queue.ts`（任务队列状态机，见 §2）。
+| M1 项 | 状态 |
+|---|---|
+| 文件夹选择 + 权限持久化 | ✅ `folder-access.ts` + `App.vue` |
+| `content_hash` + `deleted_at` 增量识别 | ✅ `core/incremental-scan.ts` + `core/scan-apply.ts` |
+| 索引状态机 / 任务队列（`src/core/`） | ✅ `core/index-queue.ts`（无游标、崩溃恢复、重试上限） |
+| 索引期间可检索 | ✅ `search.ts` 每次查询重读矩阵，`partial` 如实标注 |
+| 缩略图墙（万张虚拟滚动） | ⏳ 只做了结果网格（几十张规模）；万张级虚拟滚动未做 |
+| **产品路径索引吞吐** | ⚠️ **待查**：40 张观察 6 分钟未完，而基准是 18.56 张/秒。首要怀疑「每张两次独立事务」把 §7.7 的攒批丢了（详见实测记录 §9.10 末段） |
+| 多标签选主（Web Locks） | ⏳ 未做（当前限制：同一 profile 只开一个标签） |
+| 运行时零外发断言 | ✅ 基准页 + 产品页（`bench/e2e-app.mjs`）|
 
 文件夹选择 + 权限持久化 + `navigator.storage.persist()`；`content_hash` + `deleted_at` 增量识别；
 缩略图墙 + 虚拟滚动（**显式 `ImageBitmap.close()` + 约 300 张活跃的 LRU**）；

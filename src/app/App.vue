@@ -42,6 +42,9 @@ const supported = ref(supportsDirectoryPicker())
 const rootLabel = ref<string | null>(null)
 const permission = ref<'granted' | 'prompt' | 'denied' | 'none'>('none')
 const indexing = ref(false)
+/** 初始化（数据库 / 模型 / 向量矩阵）是否就绪。未就绪时索引按钮**必须**不可点： */
+/** 实测踩过：按钮提前可点 → startIndex 里 vectors 还是 null → 弹出一句错误的「还没有可索引的文件夹」*/
+const ready = ref(false)
 const progress = ref<IndexProgress | null>(null)
 const notice = ref<string | null>(null)
 
@@ -77,8 +80,10 @@ const progressText = computed(() => {
 })
 
 onMounted(async () => {
+  document.body.dataset.ready = 'false'
   capabilities.value = await detectCapabilities()
   await boot()
+  document.body.dataset.ready = String(ready.value)
 })
 
 onUnmounted(() => {
@@ -125,6 +130,7 @@ async function boot(): Promise<void> {
     )
     thumbsDir = await opfsDirectory('fstop-thumbs')
     await refreshThumbMap()
+    ready.value = true
   } catch (error) {
     notice.value = `初始化失败：${error instanceof Error ? error.message : String(error)}`
   }
@@ -157,8 +163,16 @@ async function resumeFolder(): Promise<void> {
 }
 
 async function startIndex(): Promise<void> {
-  if (source === null || db === null || embed === null || vectors === null || thumbsDir === null) {
-    notice.value = '还没有可索引的文件夹'
+  if (
+    !ready.value ||
+    source === null ||
+    db === null ||
+    embed === null ||
+    vectors === null ||
+    thumbsDir === null
+  ) {
+    // 分开报：未就绪与没选目录是两回事，混成一句会把人引到错的方向（E2E 首轮就被引偏过）
+    notice.value = ready.value ? '还没有可索引的文件夹' : '还在初始化（模型与向量矩阵），稍等再试'
     return
   }
   indexing.value = true
