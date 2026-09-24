@@ -53,6 +53,8 @@ const QUERY_MODE = args.includes('--query')
 const QUALITY_MODE = args.includes('--quality')
 /** `--towers`：跑拆塔方案 C spike（§9A3：ORT 指定输出列表是否真能剪掉另一塔） */
 const TOWERS_MODE = args.includes('--towers')
+/** `--exported`：跑导出塔 spike（§9A5 / D2：图手术切出的单塔成本 + 112² 版的中文 R@1） */
+const EXPORTED_MODE = args.includes('--exported')
 
 /** @param {string} url @param {number} timeoutMs */
 async function waitForServer(url, timeoutMs) {
@@ -135,26 +137,31 @@ async function main() {
       device: DEVICE,
       source: SOURCE,
       limit: String(Number(arg('limit', '0'))),
+      fidelity: arg('fidelity', '1'),
       vfs: `fstop-vfs-bench-${Date.now()}`,
     })
-    const pagePath = TOWERS_MODE
-      ? 'bench/towers.html'
-      : QUALITY_MODE
-        ? 'bench/quality.html'
-        : QUERY_MODE
-          ? 'bench/query.html'
-          : 'bench/run.html'
-    const resultKey = TOWERS_MODE
-      ? 'window.__TOWER_RESULT'
-      : QUALITY_MODE
-        ? 'window.__QUALITY_RESULT'
-        : QUERY_MODE
-          ? 'window.__QUERY_RESULT'
-          : 'window.__BENCH_RESULT'
+    const pagePath = EXPORTED_MODE
+      ? 'bench/exported.html'
+      : TOWERS_MODE
+        ? 'bench/towers.html'
+        : QUALITY_MODE
+          ? 'bench/quality.html'
+          : QUERY_MODE
+            ? 'bench/query.html'
+            : 'bench/run.html'
+    const resultKey = EXPORTED_MODE
+      ? 'window.__EXPORT_RESULT'
+      : TOWERS_MODE
+        ? 'window.__TOWER_RESULT'
+        : QUALITY_MODE
+          ? 'window.__QUALITY_RESULT'
+          : QUERY_MODE
+            ? 'window.__QUERY_RESULT'
+            : 'window.__BENCH_RESULT'
     await page.goto(`${base}/${pagePath}?${query.toString()}`, { waitUntil: 'domcontentloaded' })
     page.on('pageerror', (error) => console.log(`[pageerror] ${error.message}`))
 
-    if (CORPUS !== null && !QUERY_MODE && !QUALITY_MODE && !TOWERS_MODE) {
+    if (CORPUS !== null && !QUERY_MODE && !QUALITY_MODE && !TOWERS_MODE && !EXPORTED_MODE) {
       // Playwright 对 `<input webkitdirectory>` 只接受**目录**（传文件数组会直接报错）。
       // 目录里的**软链会被 Chromium 逐项静默过滤**（安全机制；混合目录只丢软链项，
       // 实测 files-probe 四形态对照），因此 `--limit N` 用「硬链接子集目录」实现：
@@ -177,14 +184,21 @@ async function main() {
     }
 
     // 就绪条件必须等**终态字段**：页面一开始就会渲染 `{phase}` 这类中间态，
-    // 只等「结果存在」会立刻返回中间态（实测两次踩到）
-    const ready = TOWERS_MODE
-      ? `${resultKey} !== undefined && ${resultKey}.prunedImageMs !== undefined`
-      : QUALITY_MODE
-        ? `${resultKey} !== undefined && ${resultKey}.metrics !== undefined`
-        : QUERY_MODE
-          ? `${resultKey} !== undefined && ${resultKey}.textEmbedMs !== undefined`
-          : `${resultKey} !== undefined && ${resultKey}.photosPerSecond !== undefined`
+    // 只等「结果存在」会立刻返回中间态（实测两次踩到）。
+    // 同时要接受 `phase === 'error'`：页面把异常渲染进 `#out` 但不会写终态字段，
+    // 少了这一条，一次加载失败会把驱动器白等满 60 分钟（拆塔页首跑就是这么浪费的）。
+    const failed = `${resultKey} !== undefined && ${resultKey}.phase === 'error'`
+    const ready = `(${
+      EXPORTED_MODE
+        ? `${resultKey} !== undefined && ${resultKey}.costMs !== undefined`
+        : TOWERS_MODE
+          ? `${resultKey} !== undefined && ${resultKey}.prunedImageMs !== undefined`
+          : QUALITY_MODE
+            ? `${resultKey} !== undefined && ${resultKey}.metrics !== undefined`
+            : QUERY_MODE
+              ? `${resultKey} !== undefined && ${resultKey}.textEmbedMs !== undefined`
+              : `${resultKey} !== undefined && ${resultKey}.photosPerSecond !== undefined`
+    }) || (${failed})`
     // 等待期间每 20 s 汇报一次页面状态：卡住时能直接看到页面停在哪
     const heartbeat = setInterval(async () => {
       const snapshot = await page
@@ -201,6 +215,7 @@ async function main() {
     }
     const result = await page.evaluate(resultKey)
     const userAgent = await page.evaluate('navigator.userAgent')
+    if (result?.phase === 'error') console.error(`页面失败：${result.message ?? '(无 message)'}`)
 
     const payload = {
       measuredAt: new Date().toISOString(),
@@ -209,13 +224,16 @@ async function main() {
       ...result,
     }
     await mkdir(path.join('bench', 'results'), { recursive: true })
-    const prefix = TOWERS_MODE
-      ? 'towers'
-      : QUALITY_MODE
-        ? 'quality'
-        : QUERY_MODE
-          ? 'query'
-          : 'index'
+    // 导出塔模式带 dtype 后缀：同一轮 D3 对照要能同时留下 q4f16 与 fp16 两份结果
+    const prefix = EXPORTED_MODE
+      ? `exported-${DTYPE}`
+      : TOWERS_MODE
+        ? 'towers'
+        : QUALITY_MODE
+          ? 'quality'
+          : QUERY_MODE
+            ? 'query'
+            : 'index'
     const file = path.join(
       'bench',
       'results',
@@ -225,7 +243,33 @@ async function main() {
 
     console.log(`\n浏览器：${userAgent}`)
     console.log(`模型：${MODEL} [${DTYPE}]`)
-    if (TOWERS_MODE) {
+    if (EXPORTED_MODE) {
+      console.log(
+        result.fidelity?.skipped === true
+          ? '保真：已跳过（?fidelity=0，没有参照双塔模型）'
+          : `保真（与原双塔模型比）：image_embeds 余弦 ${result.fidelity?.imageEmbedsCosine}，文本 ${result.fidelity?.textEmbedsCosine}（维度 ${JSON.stringify(result.fidelity?.dims)}；文本烟雾 ${result.fidelity?.textSmokeDifferentVectors}）`,
+      )
+      console.log(
+        `双塔全算中位：${result.costMs?.dualFull ?? '—'} ms；文本塔 ${result.costMs?.text} ms`,
+      )
+      console.log(`视觉塔单塔中位（ms）：${JSON.stringify(result.visionCostMs)}`)
+      if (Object.keys(result.unavailable ?? {}).length > 0) {
+        console.log(`⚠ 未导出/建不起来的档：${JSON.stringify(result.unavailable)}`)
+      }
+      console.log(
+        `拟合：固定开销 ${result.fit?.fixedMs ?? '—'} ms + ${result.fit?.perTokenMs ?? '—'} ms/token（点 ${JSON.stringify(result.fit?.points)}）`,
+      )
+      console.log(`同图 224² 与各档的余弦：${JSON.stringify(result.crossResolutionCosine)}`)
+      console.log(
+        `样例库图像向量化中位（ms）：${JSON.stringify(result.imageEmbedMs)}；文本 ${result.textEmbedMs?.median} ms`,
+      )
+      for (const [label, metrics] of Object.entries(result.quality ?? {})) {
+        const m = metrics
+        console.log(
+          `[${label}] 中文 R@1 ${(m.recallAt1 * 100).toFixed(1)}%  R@5 ${(m.recallAt5 * 100).toFixed(1)}%  R@10 ${(m.recallAt10 * 100).toFixed(1)}%  MRR ${m.mrr}（${result.samples} 张 / ${result.queries} 条）`,
+        )
+      }
+    } else if (TOWERS_MODE) {
       console.log(
         `全输出 run（现状）：${result.fullImageMs} ms；指定 ['image_embeds']：${result.prunedImageMs} ms（${result.prunedSpeedup}×）`,
       )

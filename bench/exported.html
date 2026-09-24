@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fstop · 导出塔 spike（D2）</title>
+    <style>
+      body {
+        background: #0e0e11;
+        color: #ececf1;
+        font:
+          12px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        margin: 0;
+        padding: 24px;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>导出塔 spike（交接说明 §9A5 / §9B 的 D2）</h1>
+    <p>
+      直接加载 <code>bench/export/*.onnx</code>（由
+      <code>python3 bench/export-towers.py</code> 切出的视觉塔 / 文本塔 / 112²
+      视觉塔），测三件事：单塔成本、与原双塔模型的一致性（余弦）、 以及 112² 版的中文
+      R@1。参数：<code>runs</code> / <code>limit</code>。结果写入
+      <code>window.__EXPORT_RESULT</code>。
+    </p>
+    <pre id="out">starting…</pre>
+    <script type="module" src="/bench/exported.ts"></script>
+  </body>
+</html>

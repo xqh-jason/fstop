@@ -32,7 +32,7 @@ import { configureModelRuntime, DEFAULT_DTYPE, DEFAULT_MODEL_ID } from '../src/s
 
 const params = new URLSearchParams(location.search)
 const MODEL_ID = params.get('model') ?? DEFAULT_MODEL_ID
-const DTYPES = ['q4f16', 'fp16', 'fp32'] as const
+const DTYPES = ['q4f16', 'fp16', 'fp32', 'q4', 'q8', 'int8', 'uint8', 'bnb4'] as const
 const DTYPE = DTYPES.find((candidate) => candidate === params.get('dtype')) ?? DEFAULT_DTYPE
 const RUNS = Number(params.get('runs') ?? 10)
 /** EP 对照：`wasm` 用来判定「不剪枝」是 ORT 通用行为还是 WebGPU EP 特有行为 */

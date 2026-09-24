@@ -180,12 +180,30 @@ async function main() {
   }
 
   await mkdir(path.dirname(MANIFEST_PATH), { recursive: true })
+  // 与既有清单**合并**而不是覆盖：分次拉取（默认档 / --dtype fp16 / 另一个模型）时，
+  // 先前的校验值必须留着——覆盖会让「清单是校验值唯一真相源」变成只在最后一次运行时成立。
+  const previous = JSON.parse(await readFile(MANIFEST_PATH, 'utf8').catch(() => '{"models":[]}'))
+  const key = (entry) => `${entry.model_id}|${entry.dtype}|${entry.file}`
+  const fresh = new Set(recorded.map(key))
+  const merged = [
+    ...(previous.models ?? []).filter((entry) => !fresh.has(key(entry))),
+    ...recorded,
+  ].sort((a, b) => key(a).localeCompare(key(b)))
   await writeFile(
     MANIFEST_PATH,
-    `${JSON.stringify({ measured_at: '2026-09-23', models: recorded }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        measured_at: new Date().toISOString().slice(0, 10),
+        note: '由 scripts/fetch-models.mjs 生成，唯一真相源，禁止手改；分次运行会合并而不是覆盖',
+        models: merged,
+      },
+      null,
+      2,
+    )}\n`,
   )
   console.log(
-    `\n合计 ${(totalBytes / 1024 / 1024).toFixed(1)} MB，用时 ${totalSeconds.toFixed(1)} s（未命中缓存的下载），清单 → public/models/manifest.json`,
+    `\n合计 ${(totalBytes / 1024 / 1024).toFixed(1)} MB，用时 ${totalSeconds.toFixed(1)} s（未命中缓存的下载），` +
+      `本次 ${recorded.length} 条 / 清单共 ${merged.length} 条 → public/models/manifest.json`,
   )
 }
 

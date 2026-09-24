@@ -41,9 +41,17 @@ is **not** decodable in Chromium, and `opfs-sahpool` needs Web Locks leader elec
 Two M0-closeout findings that reset the first M1 decision: **ONNX Runtime's WebGPU EP does not prune unused
 outputs** (naming `image_embeds` as the only fetch returns one tensor but takes the same 59 ms as the full run),
 and the single-image cost is **~97% vision tower** — the "wasted text tower" that the earlier numbers blamed for
-59% of embed time is really ~0.5 ms, because the placeholder text fed during indexing is two tokens. The vision
-tower's resolution is pinned by the export (197 positional tokens), so the 10-minute sprint line can only be
-reached by a cheaper vision backbone or a re-export, not by pipelining. Details: `docs/Fstop-光圈-M0-实测记录.md` §9.
+59% of embed time is really ~0.5 ms, because the placeholder text fed during indexing is two tokens.
+
+The M1 decision is now settled, and it is **not** a cheaper backbone. The resolution lock turned out to be three
+constants (a `[1,197,768]` positional embedding, 96 Reshape constants, plus 667 stale `value_info` shape
+annotations that `extract_model` copies along), and rewriting all three makes the same weights run at any
+`(n²+1)` token count. Re-exporting the **vision tower at 160² (101 tokens)** costs 40 ms/photo instead of 62 ms,
+keeps Chinese R@1 at 100%, extrapolates 10k photos to **~7–8 min (sprint line crossed)**, and shrinks the
+first-load download from 131.8 MB to 47.4 MB (the text tower, 77.9 MB, can lazy-load on first query).
+Text queries also drop from 78 ms to ~27 ms. A dtype comparison (same page, same inputs, one variable) shows
+**fp16 is 13–16% faster than q4f16** (33 vs 38 ms at 160²) but 3.5× the bytes, so q4f16 stays the default.
+Details: `docs/Fstop-光圈-M0-实测记录.md` §9.
 
 Documents, in reading order:
 

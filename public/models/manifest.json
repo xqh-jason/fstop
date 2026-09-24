@@ -1,0 +1,50 @@
+{
+  "measured_at": "2026-09-24",
+  "note": "由 scripts/fetch-models.mjs 生成，唯一真相源，禁止手改；分次运行会合并而不是覆盖",
+  "models": [
+    {
+      "model_id": "Xenova/chinese-clip-vit-base-patch16",
+      "space": "chinese-clip-vit-b16",
+      "dim": 512,
+      "dtype": "fp16",
+      "file": "onnx/model_fp16.onnx",
+      "bytes": 377377730,
+      "sha256": "0fad978faa89b85fda53a83a4c202116a9eb87c8f9723fb4d85e4483efbce4b2",
+      "source": "https://huggingface.co/Xenova/chinese-clip-vit-base-patch16/blob/main/onnx/model_fp16.onnx",
+      "license": "模型卡未声明 license（同门 chinese-clip-rn50 标 apache-2.0）→ 不再分发，仅脚本拉取"
+    },
+    {
+      "model_id": "Xenova/chinese-clip-vit-base-patch16",
+      "space": "chinese-clip-vit-b16",
+      "dim": 512,
+      "dtype": "q4f16",
+      "file": "onnx/model_q4f16.onnx",
+      "bytes": 131794439,
+      "sha256": "bec0c439e38110cb3a1aa95f1358ef79ceda8459b02f7f20a2a09900450c101a",
+      "source": "https://huggingface.co/Xenova/chinese-clip-vit-base-patch16/blob/main/onnx/model_q4f16.onnx",
+      "license": "模型卡未声明 license（同门 chinese-clip-rn50 标 apache-2.0）→ 不再分发，仅脚本拉取"
+    },
+    {
+      "model_id": "Xenova/clip-vit-base-patch32",
+      "space": "clip-vit-b32",
+      "dim": 512,
+      "dtype": "q4f16",
+      "file": "onnx/text_model_q4f16.onnx",
+      "bytes": 72531963,
+      "sha256": "7640460b1389da7d4fa3b3ebcc80299fbe6850b209a009b5067d25c4a9d027d2",
+      "source": "https://huggingface.co/Xenova/clip-vit-base-patch32/blob/main/onnx/text_model_q4f16.onnx",
+      "license": "MIT"
+    },
+    {
+      "model_id": "Xenova/clip-vit-base-patch32",
+      "space": "clip-vit-b32",
+      "dim": 512,
+      "dtype": "q4f16",
+      "file": "onnx/vision_model_q4f16.onnx",
+      "bytes": 53267374,
+      "sha256": "d238c4e0afe798c47c5991a046b923c5bcbeed19c2d75d7c0db845ba73bb7b87",
+      "source": "https://huggingface.co/Xenova/clip-vit-base-patch32/blob/main/onnx/vision_model_q4f16.onnx",
+      "license": "MIT"
+    }
+  ]
+}

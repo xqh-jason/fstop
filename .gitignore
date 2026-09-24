@@ -22,3 +22,5 @@ bench/results/
 bench/fixtures/
 # 真实照片语料本体（GB 级，不入库；可提交的清单是 bench/corpus-manifest.json）
 bench/corpus/
+# 拆塔/降分辨率 spike 的派生产物（图手术导出，与 .cache 同一纪律：仓库不分发权重）
+bench/export/

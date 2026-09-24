@@ -22,6 +22,11 @@ Fstop 本身以 MIT 许可发布，见 `LICENSE`。
 **默认模型的许可结论**：Chinese-CLIP 权重未明示许可 → 不再分发，只提供脚本与校验值。
 使用者自行下载的行为，其合规性由使用者与其所在司法辖区决定；本项目不对权重做任何再分发声明。
 
+**派生产物同样按权重对待**：`bench/export-towers.py` 会用图手术从源权重切出单塔 / 低分辨率变体
+（`bench/export/`，已 gitignore）。这些文件**是权重**（源权重的改写版），
+因此同样**不进仓库、不进 `public/`**，只在本地生成，校验值见 `bench/export/manifest*.json`。
+分发方式（本地生成 or 自建仓库）是 M1 的待决项，见 `docs/Fstop-光圈-交接说明.md` §9B。
+
 ## 2. 人脸模型（M2 / P1，尚未接入）
 
 | 资产 | 来源 | 许可 | 本仓库是否分发 |
@@ -55,12 +60,18 @@ Fstop 本身以 MIT 许可发布，见 `LICENSE`。
 
 ## 5. 校验值
 
-**当前仓库未声明任何权重校验值**，因为尚未拉取过权重。M0 的 `scripts/fetch-models` 落地时，
-本文件必须为每个权重文件补上 `sha256`，并与 `public/models/` 中的清单保持一致。
-在此之前，任何「权重已被校验」的说法都不成立。
+权重校验值记录在 **`public/models/manifest.json`**（由 `scripts/fetch-models.mjs` 生成，
+分次运行会与既有清单合并，不覆盖）。当前已记录：
 
-> 状态更新（2026-09-24）：`scripts/fetch-models.mjs` 已落地，会把实测 sha256 写入
-> `public/models/manifest.json`；本文件在 M0 收口时同步该清单。
+| 文件 | 体积 | sha256（前 16 位） |
+|---|---|---|
+| `Xenova/chinese-clip-vit-base-patch16` `onnx/model_q4f16.onnx` | 131.8 MB | `bec0c439e38110cb…` |
+| `Xenova/chinese-clip-vit-base-patch16` `onnx/model_fp16.onnx` | 377.4 MB | `0fad978faa89b85f…` |
+| `Xenova/clip-vit-base-patch32` `onnx/vision_model_q4f16.onnx` | 53.3 MB | `d238c4e0afe798c4…` |
+| `Xenova/clip-vit-base-patch32` `onnx/text_model_q4f16.onnx` | 72.5 MB | `7640460b1389da7d…` |
+
+派生产物（`bench/export/`）的源权重 sha256 与逐文件校验值见 `bench/export/manifest.json`
+与 `manifest_fp16.json`（同样由脚本生成，不入库）。
 
 ---
 
