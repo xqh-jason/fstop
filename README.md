@@ -38,6 +38,13 @@ Measured on an M2 / Chrome 153: 783 real CC0 photos indexed at **13.6 photos/s �
 **R@1 = 100%** with the default Chinese-CLIP (an English-only CLIP collapses to 13% on the same queries), HEIC
 is **not** decodable in Chromium, and `opfs-sahpool` needs Web Locks leader election.
 
+Two M0-closeout findings that reset the first M1 decision: **ONNX Runtime's WebGPU EP does not prune unused
+outputs** (naming `image_embeds` as the only fetch returns one tensor but takes the same 59 ms as the full run),
+and the single-image cost is **~97% vision tower** — the "wasted text tower" that the earlier numbers blamed for
+59% of embed time is really ~0.5 ms, because the placeholder text fed during indexing is two tokens. The vision
+tower's resolution is pinned by the export (197 positional tokens), so the 10-minute sprint line can only be
+reached by a cheaper vision backbone or a re-export, not by pipelining. Details: `docs/Fstop-光圈-M0-实测记录.md` §9.
+
 Documents, in reading order:
 
 | File                               | What it is                                                                   |

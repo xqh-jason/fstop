@@ -38,6 +38,8 @@ const COUNT = arg('count', '200')
 const DECODE = arg('decode', '3')
 const MODEL = arg('model', 'Xenova/chinese-clip-vit-base-patch16')
 const DTYPE = arg('dtype', 'q4f16')
+/** 拆塔 spike 的 EP 对照（webgpu | wasm）：判定「不剪枝」是 ORT 通用行为还是 WebGPU EP 特有 */
+const DEVICE = arg('device', 'webgpu')
 const HEADED = args.includes('--headed')
 /** `--source http`：语料由 dev server 直接服务，页面用 HTTP 读（绕开 setInputFiles 那条不稳的路） */
 const SOURCE = args.includes('--source')
@@ -87,6 +89,7 @@ async function main() {
   server.stderr.on('data', (chunk) => process.stderr.write(`[vite] ${chunk}`))
   const base = `http://127.0.0.1:${PORT}`
 
+  let context = null
   try {
     await waitForServer(`${base}/bench/run.html`, 120_000)
 
@@ -100,7 +103,7 @@ async function main() {
     for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
       await rm(path.join(profileDir, name), { force: true })
     }
-    const context = await chromium.launchPersistentContext(profileDir, {
+    context = await chromium.launchPersistentContext(profileDir, {
       channel: 'chrome',
       headless: !HEADED,
     })
@@ -115,12 +118,21 @@ async function main() {
       if (message.type() === 'error') consoleErrors.push(message.text())
       console.log(`[page] ${message.text()}`)
     })
+    // 资源 404 也要点名：首轮 spike 里有一条无主的 404，只有 URL 才能定位（可观测性纪律）。
+    // 注意必须挂在 **context** 上：模型权重是 Worker 里 fetch 的，page 级监听收不到 Worker 的请求。
+    context.on('response', (response) => {
+      if (response.status() >= 400) console.log(`[http ${response.status()}] ${response.url()}`)
+    })
+    context.on('requestfailed', (request) => {
+      console.log(`[http failed] ${request.url()} ${request.failure()?.errorText ?? ''}`)
+    })
 
     const query = new URLSearchParams({
       count: COUNT,
       decode: DECODE,
       model: MODEL,
       dtype: DTYPE,
+      device: DEVICE,
       source: SOURCE,
       limit: String(Number(arg('limit', '0'))),
       vfs: `fstop-vfs-bench-${Date.now()}`,
@@ -218,6 +230,15 @@ async function main() {
         `全输出 run（现状）：${result.fullImageMs} ms；指定 ['image_embeds']：${result.prunedImageMs} ms（${result.prunedSpeedup}×）`,
       )
       console.log(
+        `输出键：全量 ${JSON.stringify(result.fullOutputKeys)} → 指定后 ${JSON.stringify(result.prunedOutputKeys)}`,
+      )
+      console.log(`耗时分布（min/median/max ms）：${JSON.stringify(result.spreadMs)}`)
+      for (const item of result.sweep ?? []) {
+        console.log(
+          `[扫描] ${item.label}（图 ${item.imageSize}px，文本 ${item.textTokens} token）：${item.medianMs ?? `失败 ${item.error}`} ms`,
+        )
+      }
+      console.log(
         `剪枝文本塔：${result.prunedTextMs} ms；只喂单侧输入：${JSON.stringify(result.omitOtherInputs)}`,
       )
       console.log(
@@ -251,9 +272,12 @@ async function main() {
     }
     console.log(`结果 → ${file}`)
     if (consoleErrors.length > 0) console.error(`页面错误：${consoleErrors.join(' | ')}`)
-
-    await context.close()
   } finally {
+    // 浏览器必须在这里关：写在 try 末尾的话，一旦中途抛错/被 Ctrl-C，Chrome 会带着
+    // 持久化 profile 留在后台（并留下进程单例锁，下一轮启动要先去清锁）。实测确认过
+    // 正常路径下不留残留进程；这里补的是**异常路径**。
+    if (context !== null)
+      await context.close().catch((error) => console.error(`关闭浏览器失败：${error}`))
     server.kill('SIGTERM')
   }
 }
