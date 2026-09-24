@@ -12,7 +12,8 @@
 | 环境 B | **系统 Chrome 153.0.0.0（headless，`channel: 'chrome'`）**，由 `pnpm bench` 驱动 —— 这才是权威环境 |
 | WebGPU | 可用；`adapter.info` 为空对象，**无法据此判定软硬件适配器**（必须用 WebGL 渲染器名兜底） |
 | 网络 | 本机经 HTTP 代理，实测 ~0.45 MB/s（Node 端）；用户直连 HF 为 2.6 MB/s（计划附录 A） |
-| 语料 | 合成语料（60% 4032×3024 + 20% 4000×3000 + 10% 6000×4000 + 10% 小图），JPEG q0.85，单张仅 ~200 KB |
+| 语料 | 合成语料（60% 4032×3024 + 20% 4000×3000 + 10% 6000×4000 + 10% 小图），JPEG q0.85，单张仅 ~200 KB；**真实语料** 783 张 Wikimedia CC0 原图（1.71 GB，单张中位 1.59 MB，分辨率 1920/3840/原图三档） |
+| 语料接入 | 真实语料经 dev server 由页面 HTTP 读取（`bench/http-photo-source.ts`）。`<input webkitdirectory>` 那条路实测在持久化 profile 下会静默失败，已弃用于基准 |
 | 拓扑 | 1 个 embed worker（串行）+ 3 路并发解码；缩略图 320px q0.8；向量写 OPFS 扁平矩阵 |
 
 > **头号教训：浏览器构建版本对数字的影响大于模型选择。** 同一台机器、同一份语料：
@@ -48,17 +49,24 @@
 
 | 配置 | embed 中位 | decode 中位 | 端到端 photos/s | 1 万张外推 |
 |---|---|---|---|---|
-| Chinese-CLIP ViT-B/16 q4f16（默认，`dualTower: true`） | **201 ms** | 43 ms | 9.96 | **16.7 分钟** |
-| clip-vit-base-patch32 q4f16（**显式单塔**，`dualTower: false`） | **72 ms** | 37 ms | 20.76 | **8 分钟** |
+| Chinese-CLIP ViT-B/16 q4f16（默认，`dualTower: true`）· 合成语料 | 176 ms | 41 ms | 12.04 | 13.8 分钟 |
+| **同上 · 真实语料 783 张** | **154 ms** | **47 ms** | **13.6** | **12.3 分钟** |
+| clip-vit-base-patch32 q4f16（**显式单塔**，`dualTower: false`）· 合成语料 | 72 ms | 37 ms | 20.76 | 8 分钟 |
 | 环境 A 同配置（仅作对照，不应再引用） | 320 ms | 175 ms | 4.38 | 38 分钟 |
 
-**双塔白算的代价被量化了：每张 ~129 ms，占 embed 时间的 64%。**
+**双塔白算的代价被量化了**：合成语料上每张 ~104 ms（176 → 72），占 embed 时间的 59%。
 
-按 §九 的通过线：
+真实语料反而**比合成语料快**（13.6 vs 12.04 photos/s）：合成图的 12MP 高频噪声比真实相机 JPEG 更难解码。
 
-- 默认模型 201 ms → 落在「150 ms–1 s → 降规格」区间；单塔模型 72 ms → 通过（≤150 ms）。
-- 1 万张外推：默认 16.7 分钟（**过 20 分钟验收线，未过 10 分钟冲刺线**）；单塔 8 分钟（过冲刺线）。
-- 但这两组都是**合成语料**（单张 ~200 KB，真实相机 3–6 MB），read/decode 被低估，真实语料复测见 §4。
+### 检索延迟（§八 语义检索 ≤ 300 ms）
+
+| 模型 | 文本向量化中位 | 1 万条 × 512 维暴力余弦 top-50 | 总延迟 |
+|---|---|---|---|
+| Chinese-CLIP 双塔（默认） | 70.8 ms | 7.3 ms | **78.1 ms** ✓ |
+| 英文 CLIP 单塔 | 22.9 ms | 7.8 ms | **30.7 ms** ✓ |
+
+两个模型都远在预算内。自实现的向量检索层 7.3 ms，证实 §7.1「1 万条 512 维余弦排序是毫秒级」。
+双塔对文本查询的代价是 3×（70.8 vs 22.9 ms）——因为视觉塔占了图像侧的大头，文本查询受影响小得多。
 
 ### 关键发现：单文件双塔 + 库的解析方式
 
@@ -100,19 +108,22 @@
 
 ## 4. 端到端吞吐（§九 第 4 项）
 
-`pnpm bench` 已可复现（Playwright 驱动系统 Chrome，语料经 `<input webkitdirectory>` 注入，不复制文件）。
+`pnpm bench` 已可复现（Playwright 驱动系统 Chrome；语料经 dev server 由页面 HTTP 读取，不复制文件）。
 
-| 语料 | 配置 | photos/s | 1 万张外推 |
-|---|---|---|---|
-| 合成 24 张（单张 ~200 KB） | 默认 Chinese-CLIP 双塔 | 9.96 | 16.7 分钟 |
-| 合成 24 张 | 英文 CLIP 单塔 | 20.76 | 8 分钟 |
-| **真实 CC0 原图 1000 张** | 待测（`scripts/fetch-corpus.mjs` 抓取中） | — | — |
+| 语料 | 配置 | photos/s | 1 万张外推 | 对 §八 的判定 |
+|---|---|---|---|---|
+| 合成 24 张（单张 ~200 KB） | 默认 Chinese-CLIP 双塔 | 12.04 | 13.8 分钟 | 过验收线（≤20），未过冲刺线（≤10） |
+| **真实 CC0 原图 783 张（1.71 GB）** | **默认 Chinese-CLIP 双塔** | **13.6** | **12.3 分钟** | **同上** |
+| 合成 24 张 | 英文 CLIP 单塔 | 20.76 | 8 分钟 | 过冲刺线 |
 
-分阶段中位（默认配置，合成语料）：read 1 ms、hash 1 ms、decode 43 ms、embed 201 ms、thumb 2 ms
-→ **瓶颈完全在 embed**；真实语料会抬高 read/decode（真实相机 JPEG 3–6 MB、12–24 MP）。
+**结论：默认配置在真实语料上达到 §八 的验收线（12.3 分钟 ≤ 20 分钟），但达不到 10 分钟冲刺目标。**
+拆掉双塔白算（方案 A/C）才能进 10 分钟。
 
-入库链路已跑通：迁移在浏览器内真实执行（`schemaVersion: 1`、`applied: 1`），
-`photos/embeddings/jobs` 行数与照片数一致，向量矩阵槽位数一致，缩略图写入 OPFS。
+分阶段中位（真实语料）：read 4 ms、hash 1 ms、decode 47 ms、**embed 154 ms**、thumb 2 ms
+→ **瓶颈完全在 embed（约 70%）**，decode 次之；read/hash/thumb 都是噪声级。
+
+入库链路完整跑通：迁移在浏览器内真实执行（`schemaVersion: 1`、`applied: 1`），
+783 张照片对应 `photos`/`embeddings`/`jobs` 各 783 行、向量矩阵 783 槽位、缩略图全部落盘。
 
 ## 5. `opfs-sahpool` 多标签页（§九 第 5 项）
 
@@ -133,12 +144,21 @@
 | `JSON.stringify` 对可调用对象（transformers.js 的 processor）返回 `undefined` | 任何把 processor 塞进日志/JSON 的地方都要兜底 |
 | OPFS `getFileHandle` 拒绝含 `/` 的名字 | 向量矩阵文件名不能用模型 id（`Xenova/...`），必须用 `space` 标识（已修） |
 | 语料/缩略图/向量的 OPFS 写入均正常，`createWritable` 保持打开可行 | §7.4 的存储分层成立 |
+| **`VectorMatrix.append` 有槽位竞态**：offset 在 `await write()` 之后自增，3 个并发 worker 会算出同一槽位 → 撞 `UNIQUE (model_id, matrix_offset)`，批次写失败 → promise 拒绝 → **页面静默空转**（无任何可见错误） | 已修：槽位改为 await 之前**同步预留**；定位写入允许乱序完成 |
+| **数据库连接只有一个，`BEGIN` 不能并发**：多个解码 worker 同时提交批次会互相打断 | 已修：批量写串行化 |
+| **强杀会留下陈旧的 `SingletonLock`**，Chrome 见到它直接拒绝启动（`Failed to create SingletonLock: File exists`） | 已修：启动前清理 profile 的进程单例锁 |
+| **`setInputFiles` 对软链目录静默置空**（`input.files.length` 恒为 0），对真实文件正常；且 Playwright **拒绝**给 `webkitdirectory` 传文件数组 | 基准改用 dev server + HTTP 语料源（`bench/http-photo-source.ts`）；`--limit` 用硬链接子集目录 |
+| 基准页只写 DOM 不写 console 时，「卡住」完全无从诊断 | 已修：页面进度 + 心跳（含当前阶段）转发到驱动器控制台；`pageerror` 立刻打印 |
+
+> 教训：**这三类「静默卡死」全都源于缺少可观测性**（无进度、无错误输出、无心跳）。
+> 加上心跳与即时 pageerror 后，同样的故障在 5 秒内就暴露了根因。
 
 ## 7. 尚未完成（M0 收口前必须补）
 
-1. ~~1000 张真实照片库~~ → 改为**网上 CC0 原图语料**（用户无私库）：`scripts/fetch-corpus.mjs` 抓取中，抓完跑真实语料那一轮；
-2. ~~在用户 Chrome 上复测第 2、4 项~~ → **已完成**（环境 B：Chrome 153 headless，`pnpm bench`）；
+1. ~~1000 张真实照片库~~ → **已用网上 CC0 原图替代**（783 张，1.71 GB），用户无私库；
+2. ~~在用户 Chrome 上复测~~ → **已完成**（Chrome 153 headless，`pnpm bench`）；
 3. ~~真实 iPhone HEIC 样张~~ → 用户无样张，按「明确排除 + 界面告知」定稿；
-4. 拆塔方案 C 的 spike（ORT 按需输出剪枝是否真的省下另一塔）；
+4. **有头模式（`--headed`）复测一次**，确认 headless 数字不偏乐观；
 5. **检索质量**（中文 query 命中率）——M0 完全没测，却是默认模型选型的真正裁判；
-6. 有头模式（`--headed`）复测一次，确认 headless 数字不偏乐观。
+6. 拆塔方案 C 的 spike（ORT 按需输出剪枝是否真能省下另一塔）；
+7. `files` 模式（`<input webkitdirectory>`）在持久化 profile 下静默失败的原因未查清——基准已绕开，但 M1 的 Playwright 端到端测试若要复用这条路，得先弄清。

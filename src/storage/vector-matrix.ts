@@ -40,13 +40,17 @@ export class VectorMatrix {
     if (vector.length !== this.dimension) {
       throw new Error(`向量维度 ${vector.length} ≠ 矩阵维度 ${this.dimension}`)
     }
-    const offset = this.position / (this.dimension * Float32Array.BYTES_PER_ELEMENT)
+    // 槽位必须**同步预留**再 await 写入：否则并发调用会读到同一个 position，
+    // 算出同一个 offset、互相覆盖，最后撞 `UNIQUE (model_id, matrix_offset)`（实测踩过）。
+    // 定位写入（显式 position）允许乱序完成，所以先预留、后写是安全的。
+    const offset = this.slots
+    const position = this.position
+    this.position += this.dimension * Float32Array.BYTES_PER_ELEMENT
     await this.writable.write({
       type: 'write',
-      position: this.position,
+      position,
       data: vector.slice().buffer as ArrayBuffer,
     })
-    this.position += this.dimension * Float32Array.BYTES_PER_ELEMENT
     return offset
   }
 

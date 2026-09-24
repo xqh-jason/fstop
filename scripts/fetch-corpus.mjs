@@ -268,15 +268,32 @@ async function main() {
   } catch {
     loaded = []
   }
-  // 清单必须只描述**磁盘上真实存在**的文件：文件名碰撞等历史问题会让清单条目落空，
-  // 留着它们等于让语料「可复现」变成空话。
+  // 清单必须只描述**磁盘上真实存在、文件名唯一、内容与 sha256 一致**的文件：
+  // 文件名碰撞（长标题截断、哈希前缀相同）会让两个条目指向同一路径，
+  // 后写覆盖前者，前者的哈希随即过期——这种条目必须剔除，否则「可复现」是空话。
   const entries = []
+  const seenFiles = new Set()
+  let dropped = 0
   for (const entry of loaded) {
-    const file = await stat(path.join(OUTPUT_DIR, entry.file)).catch(() => null)
-    if (file?.isFile() === true) entries.push(entry)
+    if (seenFiles.has(entry.file)) {
+      dropped += 1
+      continue
+    }
+    const buffer = await readFile(path.join(OUTPUT_DIR, entry.file)).catch(() => null)
+    if (buffer === null) {
+      dropped += 1
+      continue
+    }
+    const digest = createHash('sha256').update(buffer).digest('hex')
+    if (digest !== entry.sha256) {
+      dropped += 1
+      continue
+    }
+    seenFiles.add(entry.file)
+    entries.push(entry)
   }
-  if (entries.length !== loaded.length) {
-    console.warn(`清单里有 ${loaded.length - entries.length} 条没有对应文件，已剔除`)
+  if (dropped > 0) {
+    console.warn(`清单里有 ${dropped} 条重复、缺失或哈希不匹配，已剔除`)
   }
 
   if (verifyOnly) {

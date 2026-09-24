@@ -18,7 +18,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { link, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from '@playwright/test'
 
@@ -37,7 +37,12 @@ const DECODE = arg('decode', '3')
 const MODEL = arg('model', 'Xenova/chinese-clip-vit-base-patch16')
 const DTYPE = arg('dtype', 'q4f16')
 const HEADED = args.includes('--headed')
-const SOURCE = CORPUS === null ? 'opfs' : 'files'
+/** `--source http`：语料由 dev server 直接服务，页面用 HTTP 读（绕开 setInputFiles 那条不稳的路） */
+const SOURCE = args.includes('--source')
+  ? arg('source', 'opfs')
+  : CORPUS === null
+    ? 'opfs'
+    : 'files'
 /** `--query`：跑检索延迟页（§八 ≤ 300 ms），不建索引 */
 const QUERY_MODE = args.includes('--query')
 
@@ -84,13 +89,26 @@ async function main() {
     // 持久化后 Cache Storage 跨轮复用，权重只下一次。
     const profileDir = path.resolve('.cache', 'bench-profile')
     await mkdir(profileDir, { recursive: true })
+    // 被强杀（例如 `timeout` 打断）会留下陈旧的进程单例锁，Chrome 见到它**直接拒绝启动**。
+    // 这个 profile 归基准独占（并发跑两轮基准本就不支持），所以直接清理。
+    for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      await rm(path.join(profileDir, name), { force: true })
+    }
     const context = await chromium.launchPersistentContext(profileDir, {
       channel: 'chrome',
       headless: !HEADED,
     })
     const page = context.pages()[0] ?? (await context.newPage())
     const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
+    // 页面错误必须**立刻**打出来：只在结尾汇总等于盲飞（实测被这个坑过一次）
+    page.on('pageerror', (error) => {
+      consoleErrors.push(String(error))
+      console.error(`[pageerror] ${error}`)
+    })
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text())
+      console.log(`[page] ${message.text()}`)
+    })
 
     const query = new URLSearchParams({
       count: COUNT,
@@ -98,6 +116,7 @@ async function main() {
       model: MODEL,
       dtype: DTYPE,
       source: SOURCE,
+      limit: String(Number(arg('limit', '0'))),
       vfs: `fstop-vfs-bench-${Date.now()}`,
     })
     const pagePath = QUERY_MODE ? 'bench/query.html' : 'bench/run.html'
@@ -105,17 +124,45 @@ async function main() {
     await page.goto(`${base}/${pagePath}?${query.toString()}`, { waitUntil: 'domcontentloaded' })
 
     if (CORPUS !== null && !QUERY_MODE) {
-      // Playwright 支持给 webkitdirectory 输入直接塞目录
-      await page.setInputFiles('#corpus', path.resolve(CORPUS))
+      // Playwright 对 `<input webkitdirectory>` 只接受**目录**（传文件数组会直接报错），
+      // 而目录里的**软链会被 Chrome 静默忽略**（实测 files.length 恒为 0）。
+      // 因此 `--limit N` 用「硬链接子集目录」实现：不复制字节、也不触发软链问题。
+      const limit = Number(arg('limit', '0'))
+      if (limit > 0) {
+        const manifest = JSON.parse(await readFile(path.join(CORPUS, 'manifest.json'), 'utf8'))
+        const subset = path.resolve('.cache', 'bench-subset')
+        await rm(subset, { recursive: true, force: true })
+        await mkdir(subset, { recursive: true })
+        for (const entry of manifest.slice(0, limit)) {
+          const target = path.join(subset, entry.file)
+          await link(path.resolve(CORPUS, entry.file), target).catch(() => undefined)
+        }
+        console.log(`子集目录（硬链接 ${limit} 个）→ ${subset}`)
+        await page.setInputFiles('#corpus', subset)
+      } else {
+        await page.setInputFiles('#corpus', path.resolve(CORPUS))
+      }
     }
 
-    // 索引模式必须等**终态**（有 photosPerSecond），否则会在第一个 phase 渲染时就返回；
-    // 检索模式没有 photosPerSecond，只能等结果对象出现。
+    // 就绪条件必须等**终态字段**：页面一开始就会渲染 `{phase}` 这类中间态，
+    // 只等「结果存在」会立刻返回中间态（实测两次踩到）
     const ready = QUERY_MODE
-      ? `${resultKey} !== undefined`
+      ? `${resultKey} !== undefined && ${resultKey}.textEmbedMs !== undefined`
       : `${resultKey} !== undefined && ${resultKey}.photosPerSecond !== undefined`
-    // 注意 waitForFunction 的第二个参数是 arg、第三个才是 options：写错位置会静默用 30 s 默认超时
-    await page.waitForFunction(ready, undefined, { timeout: 60 * 60 * 1000 })
+    // 等待期间每 20 s 汇报一次页面状态：卡住时能直接看到页面停在哪
+    const heartbeat = setInterval(async () => {
+      const snapshot = await page
+        .evaluate('document.getElementById("out")?.textContent?.slice(0, 200) ?? "no #out"')
+        .catch((error) => `unavailable: ${String(error)}`)
+      console.log(`[wait] ${String(snapshot).replace(/\s+/g, ' ')}`)
+    }, 20_000)
+
+    try {
+      // 注意 waitForFunction 的第二个参数是 arg、第三个才是 options：写错位置会静默用 30 s 默认超时
+      await page.waitForFunction(ready, undefined, { timeout: 60 * 60 * 1000 })
+    } finally {
+      clearInterval(heartbeat)
+    }
     const result = await page.evaluate(resultKey)
     const userAgent = await page.evaluate('navigator.userAgent')
 

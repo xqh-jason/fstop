@@ -19,6 +19,7 @@ import type { EmbedService } from '../src/workers/embed.worker'
 import type { CorpusFile, CorpusSink } from './corpus'
 import { DEFAULT_CORPUS, generateCorpus } from './corpus'
 import { FileListPhotoSource } from './file-list-source'
+import { HttpPhotoSource } from './http-photo-source'
 
 const params = new URLSearchParams(location.search)
 const COUNT = Number(params.get('count') ?? 200)
@@ -26,7 +27,9 @@ const DECODE_CONCURRENCY = Number(params.get('decode') ?? 3)
 const DTYPES = ['q4f16', 'fp16', 'fp32'] as const
 const DTYPE = DTYPES.find((candidate) => candidate === params.get('dtype')) ?? DEFAULT_DTYPE
 const MODEL_ID = params.get('model') ?? DEFAULT_MODEL_ID
-const SOURCE = params.get('source') === 'files' ? 'files' : 'opfs'
+const SOURCE_PARAM = params.get('source')
+const SOURCE = SOURCE_PARAM === 'files' ? 'files' : SOURCE_PARAM === 'http' ? 'http' : 'opfs'
+const LIMIT = Number(params.get('limit') ?? 0)
 const BATCH_SIZE = 32
 const CORPUS_SEGMENTS = ['bench-corpus'] as const
 const THUMB_SEGMENTS = ['bench-thumbs'] as const
@@ -45,6 +48,11 @@ const output = document.getElementById('out')
 function render(payload: unknown): void {
   if (output !== null) output.textContent = JSON.stringify(payload, null, 2)
   ;(window as unknown as { __BENCH_RESULT: unknown }).__BENCH_RESULT = payload
+  // 进度必须打到 console：驱动器会转发它，否则「卡住了」只能靠猜
+  const phase = (payload as { phase?: string }).phase
+  console.log(
+    phase === undefined ? `done ${JSON.stringify(payload).slice(0, 300)}` : `phase ${phase}`,
+  )
 }
 
 async function corpusSink(): Promise<CorpusSink> {
@@ -88,16 +96,25 @@ async function main(): Promise<void> {
   const startedAll = performance.now()
   render({ phase: 'opfs:corpus' })
 
-  /** files 模式：语料来自磁盘真实照片，由 bench/runner.mjs 通过 setInputFiles 注入 */
-  let fileSource: FileListPhotoSource | null = null
+  /** files/http 模式：语料来自磁盘真实照片（http 模式由 dev server 直接服务，见 HttpPhotoSource 的说明） */
+  let externalSource: PhotoSource | null = null
   let corpusReport: unknown = {}
-  if (SOURCE === 'files') {
+  if (SOURCE === 'http') {
+    const httpSource = await HttpPhotoSource.open('bench', location.origin, LIMIT)
+    externalSource = httpSource
+    corpusReport = {
+      source: 'http',
+      count: httpSource.count,
+      bytes: httpSource.bytes,
+    }
+  } else if (SOURCE === 'files') {
     const hint = document.getElementById('corpus-hint')
     if (hint !== null) hint.hidden = false
     const input = document.getElementById('corpus') as HTMLInputElement | null
     if (input === null) throw new Error('页面缺少 #corpus 输入元素')
     const files = await waitForDirectoryFiles(input)
-    fileSource = new FileListPhotoSource('bench', files)
+    const fileSource = new FileListPhotoSource('bench', files)
+    externalSource = fileSource
     corpusReport = {
       source: 'files',
       count: fileSource.count,
@@ -137,7 +154,7 @@ async function main(): Promise<void> {
     modelSpec(MODEL_ID).space,
     model.dim,
   )
-  const source: PhotoSource = fileSource ?? new OpfsPhotoSource('bench', CORPUS_SEGMENTS)
+  const source: PhotoSource = externalSource ?? new OpfsPhotoSource('bench', CORPUS_SEGMENTS)
 
   const refs: PhotoRef[] = []
   for await (const ref of source.list()) refs.push(ref)
@@ -146,38 +163,55 @@ async function main(): Promise<void> {
   const timings: PhotoTiming[] = []
   let pending: PhotoWrite[] = []
   let embedChain: Promise<unknown> = Promise.resolve()
+  // 数据库只有一个连接，`BEGIN` 不能并发：多个解码 worker 同时提交批次会互相打断
+  let dbChain: Promise<unknown> = Promise.resolve()
   let cursor = 0
   let thumbnailBytes = 0
+  let currentStage = 'idle'
 
   async function processOne(ref: PhotoRef): Promise<void> {
     const timing: PhotoTiming = { readMs: 0, decodeMs: 0, embedMs: 0, thumbMs: 0, hashMs: 0 }
+    // 前 5 张逐阶段打点：一旦「卡住」要能立刻看出卡在哪一步，而不是靠猜
+    const verbose = timings.length < 5
+    const mark = (stage: string) => {
+      currentStage = `${ref.relPath.slice(0, 28)} ${stage}`
+      if (verbose) console.log(`  ${ref.relPath.slice(0, 40)} ${stage}`)
+    }
 
     const readStarted = performance.now()
+    mark('read:start')
     const blob = await source.read(ref)
     timing.readMs = performance.now() - readStarted
+    mark(`read:done ${(blob.size / 1024).toFixed(0)}KB`)
 
     const hashStarted = performance.now()
     const hash = await contentHash(blob)
     timing.hashMs = performance.now() - hashStarted
+    mark('hash:done')
 
     const decodeStarted = performance.now()
     const decoded = await decodePhoto(blob, DEFAULT_DECODE_OPTIONS)
     timing.decodeMs = performance.now() - decodeStarted
+    mark(`decode:done ${decoded.width}x${decoded.height}`)
 
     // 串行化：GPU 只有一个会话，并发提交只会让队列互相排队（§7.4）
     const embedStarted = performance.now()
     const next = embedChain.then(() => embed.embedImage(decoded.bitmap))
     embedChain = next.catch(() => undefined)
+    mark('embed:start')
     const vector = (await next) as Float32Array
     timing.embedMs = performance.now() - embedStarted
+    mark('embed:done')
     decoded.bitmap.close()
 
     const thumbStarted = performance.now()
     const thumbName = `${ref.relPath.replace(/\.[^.]+$/, '')}.jpg`
     thumbnailBytes += await writeOpfsFile(thumbs, thumbName, decoded.thumb)
     timing.thumbMs = performance.now() - thumbStarted
+    mark('thumb:done')
 
     const offset = await vectors.append(vector)
+    mark(`vector:done slot=${offset}`)
     pending.push({
       relPath: ref.relPath,
       ext: 'jpg',
@@ -194,22 +228,35 @@ async function main(): Promise<void> {
     if (pending.length >= BATCH_SIZE) {
       const batch = pending
       pending = []
-      await db.writeBatch(batch)
+      dbChain = dbChain.then(() => db.writeBatch(batch))
+      await dbChain
     }
     timings.push(timing)
   }
 
   const indexStarted = performance.now()
+  const progressStep = Math.max(1, Math.round(refs.length / 10))
+  // 心跳：卡住时必须能立刻看出「完成到哪、当前停在哪一步」，而不是等半小时
+  const heartbeat = setInterval(() => {
+    console.log(`hb indexed=${timings.length}/${refs.length} cursor=${cursor} at=${currentStage}`)
+  }, 5000)
   await Promise.all(
     Array.from({ length: Math.max(1, DECODE_CONCURRENCY) }, async () => {
       while (cursor < refs.length) {
         const ref = refs[cursor]
         cursor += 1
         if (ref !== undefined) await processOne(ref)
+        if (timings.length % progressStep === 0) {
+          console.log(`indexed ${timings.length}/${refs.length}`)
+        }
       }
     }),
   )
-  if (pending.length > 0) await db.writeBatch(pending)
+  clearInterval(heartbeat)
+  if (pending.length > 0) {
+    dbChain = dbChain.then(() => db.writeBatch(pending))
+    await dbChain
+  }
   const indexMs = Math.round(performance.now() - indexStarted)
   await vectors.close()
 
