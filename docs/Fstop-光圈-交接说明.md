@@ -17,8 +17,9 @@
 | 原生单文件双塔 224² | 13.49 | 12.4 分钟 | 172 ms | 69 ms | 131.8 MB |
 | **重导出单塔 192²** | **18.56** | **9.0 分钟** | **113 ms** | **28 ms** | **47.5 MB** |
 
-质量损失在 783 张 / 106 条 query 上**测不出来**（R@1 −3.7 pp，配对检验 p = 0.34）。
-细节见实测记录 §9.5/§9.9/**§9.10** 与本文 §9B。
+质量损失在 783 张 / 106 条 query 上**测不出来**——而且是**产品路径上的对照**：
+zh R@1 48.1% → 46.2%（只有原生命中 7 条、只有派生命中 5 条，**配对检验 p = 0.774**），
+en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/**§9.10** 与本文 §9B。
 
 > ⚠ 修正记录：§9.6 曾据 39 张样例 / 23 条 query 判「160² 中文 R@1 仍 100%、免费」。
 > 图库扩到 **783 张 / 106 条**后 160² 掉 **−9.4 pp（p = 0.021，显著）**，
@@ -45,6 +46,7 @@
 | `src/core/model.ts` | ✅ 手写区 | §7.6 七张表的 DDL + 行类型；`SCHEMA_VERSION` |
 | `src/core/photo-source.ts` | ✅ 手写区 | `PhotoSource` / `PhotoRef` / `PhotoStat` 契约 |
 | `src/core/embedding-provider.ts` | ✅ 手写区 | `EmbeddingProvider` 契约（含「向量必须 L2 归一化」等不变量） |
+| `src/core/index-queue.ts` | ✅ M1 手写区 | **索引任务队列状态机**：无游标（`pending` 派生队列）、崩溃恢复、重试上限、`skipped` 终态；13 条单测 |
 | `src/storage/migrations.ts` | ✅ | 手写迁移链 + 事务化 `applyMigrations`（失败整体回滚） |
 | `src/storage/models.ts` | ✅ | **全项目唯一允许联网的模块**；模型目录（含实测字节数、`towers` 字段）、运行时 env 配置 |
 | `src/storage/opfs.ts` | ✅ | OPFS 基础操作 |
@@ -59,7 +61,7 @@
 | `src/app`、`src/ui` | ✅ 壳 | 应用装配 + 能力面板；**检索 UI 未做** |
 | `bench/` | ✅ M0 级 | 探针、基准页、检索延迟页、**检索质量页（§9A2 已完成）**、Playwright 驱动器、合成语料、HTTP 语料源 |
 | `scripts/` | ✅ | 零外发检查、样例/权重/语料/HEIC 夹具脚本 |
-| `tests/unit/` | ✅ 33 项 | 用 `node:sqlite` 跑**真实建表与约束**（不是正则断言 SQL 文本）；含派生塔探测与 CHW 预处理 |
+| `tests/unit/` | ✅ 46 项 | 用 `node:sqlite` 跑**真实建表与约束**（不是正则断言 SQL 文本）；含派生塔探测与 CHW 预处理 |
 | `public/samples/` | ✅ | 39 张 CC0 样例图 + `manifest.json`（逐张来源/许可/sha256） |
 | 索引状态机 / 任务队列 | ❌ | 计划 §7.4 说属于 `src/core/`，**M1 第一件事** |
 | 缩略图墙 / 检索 UI / 人物页 | ❌ | M1 |
@@ -104,6 +106,7 @@
 | 附加·大图库质量复测（2026-09-24） | **783 张 / 106 条** query：R@1 224² 48.1% → 208² 45.3%（p=.51）→ **192² 44.3%（p=.34）** → 176² 42.5%（p=.15）→ **160² 38.7%（p=.021，显著）** → 112² 24.5% | **160²「免费」被推翻，目标分辨率定为 192²**（≈9.7 分钟/1 万张），见实测记录 §9.9 |
 | 附加·D3 dtype 对照（2026-09-24） | 同条件单变量：fp16 **快 13–16%**（160² 33 vs 38 ms）但体积 3.5×（164.5 vs 47.4 MB），质量同为 R@1 100% | **默认仍 q4f16**，fp16 记为可选加速档，见实测记录 §9.8 |
 | 附加·有头复测（2026-09-24） | headless 13.09 photos/s vs **有头 14.49 photos/s**（同语料 200 张 / decode 3） | headless **不偏乐观**（保守约 10%），见实测记录 §9.7 |
+| **M1·产品路径质量对照（2026-09-24）** | 同 harness 单变量、783 张 / 106 条：zh R@1 原生双塔 **48.1%** → 192² 单塔 **46.2%**（p = 0.774）；en 38.7% → 34.9%（p = 0.424）。口径可信度：这轮原生 224² 与 §9.9 的 224² 行**逐位重合** | **192² 的质量损失在产品路径上测不出显著**；§9.9 的 −3.7 pp 偏悲观，真实 −1.9 pp，见实测记录 §9.10 |
 | **M1·派生单塔落地（2026-09-24）** | 接进产品路径后同条件单变量：原生双塔 13.49 → **派生单塔 18.56 photos/s**（1 万张 12.4 → **9.0 分钟**），embed 中位 172 → 113 ms，文本查询 69 → 28 ms，首启权重 131.8 → **47.5 MB** | **冲刺线（≤10 分钟）实测通过**；顺带修掉 ORT wasm 从 jsdelivr 外发的违规，见实测记录 §9.10 |
 
 分阶段中位：read 4 / hash 1 / **decode 47** / **embed 154** / thumb 2 ms → 瓶颈在 embed（约 70%）。
@@ -223,6 +226,8 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 | `InferenceSession.create` 报 `[webgpu] TypeError: …webgpuInit is not a function` | `onnxruntime-web/webgpu` 导出的是 **`.bundle.` 构建**（内嵌 glue），必须配 **asyncify** wasm 且**不能给 `mjs`**；给 jsep 或给 mjs 都会让它去加载不兼容的独立 glue | 已修（实测记录 §9.10）：`{ wasm: asyncify.wasm }`，与 transformers.js 一致 |
 | `transferToImageBitmap` 抛 `InvalidStateError`，整轮基准卡在 `load:models` 直到一小时超时 | 没有 2d context 的 `OffscreenCanvas` 不能 transfer | 已修：预热假图前先 `getContext('2d')` + `fillRect` |
 | 基准跑到一半页面空转（CPU 0.1%，无报错） | vite 发现**新依赖**（`onnxruntime-web`）要重新预打包 → 整页重载，基准状态丢失 | 已记入 §6：跑基准前先起一次 `pnpm dev` 预热 `node_modules/.vite/deps` |
+| 质量页报「query 没有命中任何照片」而 exported 页同样数据正常 | **两份 match 匹配逻辑**：quality 页只做前缀匹配，而 corpus query 的 `match` 是**含扩展名的完整文件名**（精确匹配） | 已修：抽成 `bench/query-targets.ts` 一处实现，两页共用。**同一语义不允许有第二份实现** |
+| 页面 `await main()` 抛错时驱动器白等满一小时 | runner 只认「页面把异常渲染成 `phase === 'error'`」，**未捕获**异常不走那条路（实测踩到：停在 `load:samples`） | 已修：runner 与 `pageerror` 竞速，未捕获异常立即失败并打印原文 |
 
 ## 9. 下一步
 
@@ -271,6 +276,9 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 （非模型 origin 的 host 一律点名并非零码退出），计划 §11.4 的那条从人工勾选变成机器检查。
 
 ### C. M1 范围（按计划 §九）
+
+**已开工**：`src/core/index-queue.ts`（任务队列状态机，见 §2）。
+
 文件夹选择 + 权限持久化 + `navigator.storage.persist()`；`content_hash` + `deleted_at` 增量识别；
 缩略图墙 + 虚拟滚动（**显式 `ImageBitmap.close()` + 约 300 张活跃的 LRU**）；
 索引期间可检索；索引进度与断点续算；`src/core/` 的**索引状态机与任务队列**；

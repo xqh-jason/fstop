@@ -24,6 +24,8 @@ import { HttpPhotoSource } from './http-photo-source'
 import { DEFAULT_DECODE_OPTIONS, decodePhoto } from '../src/workers/decode'
 import type { EmbedService } from '../src/workers/embed.worker'
 import qualityQueries from './quality-queries.json'
+import { targetsOf } from './query-targets'
+import corpusQueries from './corpus-queries.json'
 
 const params = new URLSearchParams(location.search)
 const MODEL_ID = params.get('model') ?? DEFAULT_MODEL_ID
@@ -34,7 +36,7 @@ const TOP_K = 10
 interface QualityQuery {
   readonly id: string
   /** 样例文件名前缀：`file.startsWith(match + '-')`，主题级 target 填主题前缀，单图 target 填到序号 */
-  readonly match: string
+  readonly match: string | readonly string[]
   readonly zh: string
   readonly en: string
 }
@@ -116,30 +118,49 @@ function summarize(outcomes: readonly QueryOutcome[]): LangMetrics {
 }
 
 async function main(): Promise<void> {
-  const queries = qualityQueries as readonly QualityQuery[]
-  render({ phase: 'load:samples' })
+  // 图库与 query 集可换：默认 39 张样例 / 23 条 query（M0 §7），
+  // `?gallery=bench/corpus&queries=corpus` 切到 783 张 / 106 条真实语料（M0 §9.9/§9.10 的口径）。
+  // 小样例库的「R@1 100%」分不出 100% 与 87%，做决策必须用大图库。
+  const GALLERY = params.get('gallery') || ''
+  const QUERY_SET = params.get('queries') || 'samples'
+  const queries =
+    QUERY_SET === 'corpus'
+      ? (corpusQueries as readonly QualityQuery[])
+      : (qualityQueries as readonly QualityQuery[])
+  const sourceRoot = GALLERY === '' ? 'samples' : 'corpus'
+  const sourceBase = GALLERY === '' ? 'samples' : GALLERY
+  render({ phase: 'load:samples', gallery: sourceBase, queries: queries.length })
 
-  // 样例库即检索库：39 张 CC0、20 个主题、清单逐张带来源与许可
-  const source = await HttpPhotoSource.open('samples', location.origin, 0, 'samples')
+  const source = await HttpPhotoSource.open(sourceRoot, location.origin, 0, sourceBase)
   const refs: PhotoRef[] = []
   for await (const ref of source.list()) refs.push(ref)
   const fileToIndex = new Map<string, number>()
   refs.forEach((ref, index) => fileToIndex.set(ref.relPath, index))
 
-  // match 前缀 → 目标文件；配不上一张 = ground truth 配置错误，立即失败而不是静默测空
-  const targetsOf = queries.map((query) => {
-    const targets = refs
-      .map((ref) => ref.relPath)
-      .filter((file) => file.startsWith(`${query.match}-`))
-    if (targets.length === 0) throw new Error(`query ${query.id} 的 match 前缀没有命中任何样例`)
-    return targets
-  })
+  // match → 目标文件（前缀 or 精确，见 bench/query-targets.ts）；配不上一张立即失败
+  const targets = targetsOf(
+    queries,
+    refs.map((ref) => ref.relPath),
+  )
 
   render({ phase: 'load:model', model: MODEL_ID, dtype: DTYPE, samples: refs.length })
   const embed = Comlink.wrap<EmbedService>(
     new Worker(new URL('../src/workers/embed.worker.ts', import.meta.url), { type: 'module' }),
   )
-  const model = await embed.init({ modelId: MODEL_ID, dtype: DTYPE, device: 'webgpu' })
+  // `?derived=0` 关掉派生单塔、`?derived=192` 钉住档位——这是「产品路径 vs 产品路径」的对照开关
+  const derivedParam = params.get('derived') || null
+  const derivedOptions =
+    derivedParam === null
+      ? {}
+      : derivedParam === '0'
+        ? { useDerived: false }
+        : { derivedResolution: Number(derivedParam) }
+  const model = await embed.init({
+    modelId: MODEL_ID,
+    dtype: DTYPE,
+    device: 'webgpu',
+    ...derivedOptions,
+  })
   const dim = model.dim
 
   // 烟雾测试：不同文本必须得到不同向量。双塔路径曾把「占位零图」的 image_embeds
@@ -178,7 +199,7 @@ async function main(): Promise<void> {
         const vector = await embed.embedText(query[lang])
         textTimings.push(performance.now() - started)
         const ranking = topK(matrix, vector, refs.length, dim, TOP_K)
-        const targetSet = new Set(targetsOf[q])
+        const targetSet = new Set(targets[q])
         let bestRank: number | null = null
         for (let position = 0; position < ranking.length; position += 1) {
           const hit = ranking[position]
@@ -192,7 +213,7 @@ async function main(): Promise<void> {
         }
         outcomes.push({
           id: query.id,
-          targets: targetsOf[q] ?? [],
+          targets: targets[q] ?? [],
           bestRank,
           top3: ranking.slice(0, 3).map((hit) => ({
             file: refs[hit.index]?.relPath ?? '',
@@ -202,7 +223,7 @@ async function main(): Promise<void> {
       } catch (error) {
         outcomes.push({
           id: query.id,
-          targets: targetsOf[q] ?? [],
+          targets: targets[q] ?? [],
           bestRank: null,
           error: error instanceof Error ? error.message : String(error),
           top3: [],
@@ -221,6 +242,8 @@ async function main(): Promise<void> {
   render({
     model,
     dtype: DTYPE,
+    gallery: sourceBase,
+    querySet: QUERY_SET,
     samples: refs.length,
     queries: queries.length,
     imageEmbedMs: { median: median(imageTimings) },

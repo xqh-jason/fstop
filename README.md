@@ -60,6 +60,12 @@ variable changed:
 (a rewrite of weights whose upstream model card declares no license), so they are generated locally by
 `bench/export-towers.py --deploy 192`, served from a gitignored directory, and never redistributed.
 
+And the quality cost of that speed, measured **through the product path** on the same 783-photo gallery with
+106 Chinese queries (one variable changed): zh R@1 **48.1% → 46.2%**, with 7 queries hit only by the stock path
+and 5 only by the derived one — a paired McNemar exact test gives **p = 0.774**, i.e. not measurable. English:
+38.7% → 34.9%, p = 0.424. The stock baseline reproduced the earlier spike-page measurement digit for digit,
+which is what makes the comparison trustworthy.
+
 Which resolution, and why not the cheaper one: on the 39-photo sample set **160²** looked free (R@1 still
 100%), but that sample cannot tell 100% from 87%. Re-running on a **783-photo gallery with 106 Chinese queries**
 (queries transcribed from the Commons uploaders' own titles, never from looking at the images) shows 160²

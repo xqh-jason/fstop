@@ -111,10 +111,21 @@ async function main() {
     })
     const page = context.pages()[0] ?? (await context.newPage())
     const consoleErrors = []
-    // 页面错误必须**立刻**打出来：只在结尾汇总等于盲飞（实测被这个坑过一次）
+    // 页面未捕获异常 = 这轮基准已经废了：必须立刻失败，而不是继续等就绪条件。
+    // 实测踩过：quality 页的 `await main()` 抛错（match 语义写错），页面停在 load:samples，
+    // 驱动器白等满 60 分钟。页面自己把异常渲染进 `#out` 的情况另有一条 `phase === 'error'` 判据，
+    // 但**未捕获**的异常不会走那条路，只能在这里拦。
+    let rejectOnPageError = null
+    const pageErrorSignal = new Promise((_, reject) => {
+      rejectOnPageError = reject
+    })
+    pageErrorSignal.catch(() => {
+      /* 没人 await 时不要变成 unhandled rejection */
+    })
     page.on('pageerror', (error) => {
       consoleErrors.push(String(error))
       console.error(`[pageerror] ${error}`)
+      rejectOnPageError?.(new Error(`页面未捕获异常：${error.message}`))
     })
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text())
@@ -237,7 +248,11 @@ async function main() {
 
     try {
       // 注意 waitForFunction 的第二个参数是 arg、第三个才是 options：写错位置会静默用 30 s 默认超时
-      await page.waitForFunction(ready, undefined, { timeout: 60 * 60 * 1000 })
+      // 与页面异常竞速：未捕获异常时立刻失败，不把一小时等满
+      await Promise.race([
+        page.waitForFunction(ready, undefined, { timeout: 60 * 60 * 1000 }),
+        pageErrorSignal,
+      ])
     } finally {
       clearInterval(heartbeat)
     }

@@ -36,6 +36,7 @@ import { toPixelValues } from '../src/workers/embed-preprocess'
 import { HttpPhotoSource } from './http-photo-source'
 import qualityQueries from './quality-queries.json'
 import corpusQueries from './corpus-queries.json'
+import { targetsOf } from './query-targets'
 
 const params = new URLSearchParams(location.search)
 const MODEL_ID = params.get('model') ?? DEFAULT_MODEL_ID
@@ -324,23 +325,11 @@ async function main(): Promise<void> {
   const refs: PhotoRef[] = []
   for await (const ref of source.list()) refs.push(ref)
   const subset = LIMIT > 0 ? refs.slice(0, LIMIT) : refs
-  /** `match` 可以是前缀（老格式）或精确文件名数组（新格式，含扩展名时按精确匹配） */
-  const matchesOf = (match: string | readonly string[]): readonly string[] =>
-    typeof match === 'string' ? [match] : match
-  const targetsOf = queries.map((query) => {
-    const patterns = matchesOf(query.match)
-    const targets = refs
-      .map((ref) => ref.relPath)
-      .filter((file) =>
-        patterns.some((pattern) =>
-          /\.(jpe?g|png|webp|tiff?)$/i.test(pattern)
-            ? file === pattern
-            : file.startsWith(`${pattern}-`),
-        ),
-      )
-    if (targets.length === 0) throw new Error(`query ${query.id} 的 match 没有命中任何照片`)
-    return targets
-  })
+  // match → 目标文件（前缀 or 精确，见 bench/query-targets.ts；两页共用一份，免得语义漂移）
+  const targets = targetsOf(
+    queries,
+    refs.map((ref) => ref.relPath),
+  )
 
   const DIM = 512
   const matrices = new Map<number, Float32Array>()
@@ -402,7 +391,7 @@ async function main(): Promise<void> {
       const vector = queryVectors.get(query.id)
       if (vector === undefined) throw new Error(`query ${query.id} 缺向量`)
       const ranking = topK(matrix, vector, TOP_K)
-      const targetSet = new Set(targetsOf[q])
+      const targetSet = new Set(targets[q])
       let bestRank: number | null = null
       for (let position = 0; position < ranking.length; position += 1) {
         const hit = ranking[position]
