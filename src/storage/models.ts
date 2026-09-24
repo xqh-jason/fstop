@@ -12,6 +12,12 @@
  */
 
 import { env } from '@huggingface/transformers'
+// ORT 的 wasm 运行时（vite 产出同源静态资源 URL）。**必须在任何模型加载前钉到本机**：
+// transformers.js 的默认值是把 `wasmPaths` 指向 jsdelivr CDN（其 dist 里的 `initOrtEnv`），
+// 冷缓存时那一发 25.6 MB 的请求就把「零外发」破了——实测在基准 profile 的 CacheStorage 里
+// 翻出了 `cdn.jsdelivr.net/npm/onnxruntime-web@…/ort-wasm-simd-threaded.asyncify.wasm` 的条目。
+// 缓存热时它不会再发请求（走 Cache API），所以只有冷启动才看得见，静态扫描更看不见。
+import onnxWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
 
 /** 只列出会被显式指定、且经过体积实测的档位 */
 export type Dtype = 'q4f16' | 'fp16' | 'fp32'
@@ -106,5 +112,107 @@ export function configureModelRuntime(options: ModelRuntimeOptions = {}): void {
   env.useBrowserCache = options.useBrowserCache ?? true
   if (options.remoteHost !== undefined) {
     env.remoteHost = options.remoteHost
+  }
+  // 把 ORT 的 wasm 运行时钉到本机资源（见文件头注释）。这里改的是 ORT 自己的 env 对象
+  // （transformers.js 的 `env.backends.onnx` 是它的引用），所以**必须先于任何模型加载**。
+  const ortWasm = env.backends.onnx.wasm
+  if (ortWasm === undefined) {
+    // 显式报错而不是静默跳过：跳过就等于回落到 CDN 默认值，那正是这里要杜绝的行为
+    throw new Error('ORT 的 wasm 后端不可用，无法把 wasmPaths 钉到本机资源')
+  }
+  ortWasm.wasmPaths = { wasm: onnxWasmUrl }
+}
+
+// ── 派生产物（图手术导出的单塔） ───────────────────────────────────────────────
+//
+// 背景（实测记录 §9.5/§9.9）：`Xenova/chinese-clip-vit-base-patch16` 是**单文件双塔**，
+// 且视觉塔的分辨率被导出写死在 224²/197 token。`bench/export-towers.py` 用图手术切出
+// 「视觉塔（任意分辨率）+ 文本塔」两个独立 ONNX，192² 档把 1 万张外推推进 10 分钟冲刺线，
+// 而质量损失在 783 张 / 106 条 query 上测不出来。
+//
+// **这些派生产物是权重**（源权重的改写版），源模型模型卡未声明 license
+// → 一律**不进仓库**（见 NOTICE §1）。所以这里是「探测本地是否已生成」，
+// 探测不到就回落到原生双塔路径——没跑过生成脚本的用户照样能用，只是慢一些。
+
+/** 派生产物的默认目录（`public/models/derived/`，已 gitignore，由生成脚本写入） */
+export const DERIVED_MODEL_BASE = '/models/derived'
+
+export interface DerivedTowerFile {
+  readonly file: string
+  readonly bytes: number
+  readonly sha256?: string
+}
+
+export interface DerivedTowerPlan {
+  readonly base: string
+  readonly modelId?: string
+  readonly dtype: string
+  /** 视觉塔分辨率（= 输入边长；token 数 = (resolution/16)² + 1） */
+  readonly resolution: number
+  readonly tokens: number
+  readonly vision: DerivedTowerFile
+  readonly text: DerivedTowerFile
+  readonly source?: { readonly file?: string; readonly sha256?: string }
+}
+
+interface DerivedManifest {
+  readonly model?: string
+  readonly dtype?: string
+  readonly vision?: {
+    file?: string
+    resolution?: number
+    tokens?: number
+    bytes?: number
+    sha256?: string
+  }
+  readonly text?: { file?: string; bytes?: number; sha256?: string }
+  readonly source?: { file?: string; sha256?: string }
+}
+
+/**
+ * 探测本地派生产物。**这是全项目第二处、也是最后一处允许发请求的地方**（同在本文件内，
+ * 白名单 `src/storage/models.ts` 不变）——请求的是**同源静态文件**，不是外发。
+ *
+ * 探测失败一律返回 `null`（不抛）：派生产物是可选加速路径，缺失不是错误。
+ */
+export async function discoverDerivedTowers(
+  options: { base?: string; resolution?: number; modelId?: string } = {},
+): Promise<DerivedTowerPlan | null> {
+  const base = options.base ?? DERIVED_MODEL_BASE
+  let manifest: DerivedManifest
+  try {
+    const response = await fetch(`${base}/manifest.json`, { cache: 'no-store' })
+    if (!response.ok) return null
+    manifest = (await response.json()) as DerivedManifest
+  } catch {
+    return null
+  }
+  const vision = manifest.vision
+  const text = manifest.text
+  const resolution = vision?.resolution
+  const tokens = vision?.tokens
+  if (
+    typeof vision?.file !== 'string' ||
+    typeof text?.file !== 'string' ||
+    typeof resolution !== 'number' ||
+    typeof tokens !== 'number' ||
+    typeof vision.bytes !== 'number' ||
+    typeof text.bytes !== 'number'
+  ) {
+    return null
+  }
+  // 指定了分辨率就必须匹配（避免拿 160² 的产物当 192² 用）
+  if (options.resolution !== undefined && options.resolution !== resolution) return null
+  // 指定了模型就必须匹配（切出来的塔只对源模型成立，不能塞给另一个模型）
+  if (options.modelId !== undefined && manifest.model !== options.modelId) return null
+  return {
+    base,
+    modelId: manifest.model,
+    dtype: manifest.dtype ?? DEFAULT_DTYPE,
+    resolution,
+    tokens,
+    vision: { file: vision.file, bytes: vision.bytes, sha256: vision.sha256 },
+    text: { file: text.file, bytes: text.bytes, sha256: text.sha256 },
+    source: manifest.source,
   }
 }

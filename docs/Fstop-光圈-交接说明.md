@@ -5,17 +5,28 @@
 ## 0. 一句话状态
 
 工程骨架、`src/core/` 契约、M0 五项实测**已完成并提交**；M0 收口补测（质量 / files 根因 / 拆塔 spike /
-成本口径 / 导出塔 / 有头复测）**全部完成**（2026-09-24）；**M1（MVP）尚未开始**。
+成本口径 / 导出塔 / 有头复测）**全部完成**（2026-09-24）；**M1（MVP）进行中**——
+「让 1 万张进 10 分钟」这一项**已经落地并实测收口**（见下），其余 M1 工作项未开始。
 
-**M1 的第一个决策已经有答案**：把视觉塔从原图重导出一份 **192²** 单塔（位置编码插值 + 形状常量改写），
-1 万张外推 **≈9.7 分钟（刚过 10 分钟冲刺线）**，质量损失在 783 张 / 106 条 query 上**测不出来**
-（R@1 −3.7 pp，配对检验 p = 0.34）；首启下载 131.8 → 47.4 MB、文本查询 78 → ≈27 ms。
-细节见实测记录 §9.5/§9.6/§9.9 与本文 §9B。
+**M1 的第一个决策已经有答案，而且已经实测**：把视觉塔从原图重导出一份 **192²** 单塔
+（位置编码插值 + 形状常量改写），接进 `embed.worker.ts` 的第三条路径（探测不到就回落原生双塔）。
+同一轮 200 张真实语料的单变量对照：
+
+| 嵌入路径 | photos/s | 1 万张外推 | embed 中位 | 文本查询 | 首启权重 |
+|---|---|---|---|---|---|
+| 原生单文件双塔 224² | 13.49 | 12.4 分钟 | 172 ms | 69 ms | 131.8 MB |
+| **重导出单塔 192²** | **18.56** | **9.0 分钟** | **113 ms** | **28 ms** | **47.5 MB** |
+
+质量损失在 783 张 / 106 条 query 上**测不出来**（R@1 −3.7 pp，配对检验 p = 0.34）。
+细节见实测记录 §9.5/§9.9/**§9.10** 与本文 §9B。
 
 > ⚠ 修正记录：§9.6 曾据 39 张样例 / 23 条 query 判「160² 中文 R@1 仍 100%、免费」。
 > 图库扩到 **783 张 / 106 条**后 160² 掉 **−9.4 pp（p = 0.021，显著）**，
 > 于是目标分辨率改为 192²（208²/192²/176² 与 224² 分不出高下，160² 是第一个测得出退化的档）。
 > **教训：小样本上的「100%」不能用来做决策。** 见实测记录 §9.9。
+>
+> ⚠ 另一条修正记录：§9.9 的 `≈9.7 分钟` 是**外推**，当时明确写了「不实测不算数」。
+> §9.10 实测为 **9.0 分钟**，结论方向不变，但数字以外推为准会偏保守约 7%。
 
 ## 1. 按顺序读这些
 
@@ -41,12 +52,14 @@
 | `src/storage/vector-matrix.ts` | ✅ | 自实现扁平向量矩阵（顺序追加；槽位同步预留） |
 | `src/storage/db.worker.ts` | ✅ | `opfs-sahpool` VFS + 迁移 + 批量入库（M0 级，无选主） |
 | `src/workers/decode.ts` | ✅ | EXIF 摆正 + 降采样 + 缩略图 |
-| `src/workers/embed.worker.ts` | ✅ | 单实例推理 Worker；**双塔/单塔两种加载路径** |
+| `src/workers/embed.worker.ts` | ✅ | 单实例推理 Worker；**三条加载路径**：`derived`（重导出单塔，M1）/ 原生单文件双塔 / 原生分塔；回落原因不静默 |
+| `src/workers/embed-derived.ts` | ✅ M1 | 派生单塔加载器：自建 ORT 会话（wasm 钉同源）、文本塔懒加载、动态 `import()` |
+| `src/workers/embed-preprocess.ts` | ✅ M1 | `ImageBitmap` → NCHW 预处理；**产品 Worker 与基准页共用同一份** |
 | `src/shared/env.ts` | ✅ | 能力探测（FSA / OPFS / WebGPU / persist） |
 | `src/app`、`src/ui` | ✅ 壳 | 应用装配 + 能力面板；**检索 UI 未做** |
 | `bench/` | ✅ M0 级 | 探针、基准页、检索延迟页、**检索质量页（§9A2 已完成）**、Playwright 驱动器、合成语料、HTTP 语料源 |
 | `scripts/` | ✅ | 零外发检查、样例/权重/语料/HEIC 夹具脚本 |
-| `tests/unit/` | ✅ 23 项 | 用 `node:sqlite` 跑**真实建表与约束**（不是正则断言 SQL 文本） |
+| `tests/unit/` | ✅ 33 项 | 用 `node:sqlite` 跑**真实建表与约束**（不是正则断言 SQL 文本）；含派生塔探测与 CHW 预处理 |
 | `public/samples/` | ✅ | 39 张 CC0 样例图 + `manifest.json`（逐张来源/许可/sha256） |
 | 索引状态机 / 任务队列 | ❌ | 计划 §7.4 说属于 `src/core/`，**M1 第一件事** |
 | 缩略图墙 / 检索 UI / 人物页 | ❌ | M1 |
@@ -69,7 +82,8 @@
 | `2d11397` | **拆塔 spike 出数**：ORT WebGPU EP 不剪枝（方案 C 运行时路线出局）+ 推翻「白算 59%」的归因 + 成本口径修正（实测记录 §9） |
 | `30b93a4` | 同上收口（拆塔 spike 的文档与参数化补完） |
 | `0b5f3fc` | **导出塔 spike 出数**：160² 重导出过冲刺线，D3 定案 fp16 快 13–16% 但体积 3.5×；顺带修 `fetch-models` 覆盖清单的缺陷（实测记录 §9.5–§9.8） |
-| `010e149` | **783 张图库 / 106 条 query 复测**：推翻 160² 的「免费」结论（−9.4 pp，p=0.021），目标分辨率定为 **192²**；新增 `bench/corpus-queries.json` 与 `?queries=corpus`（实测记录 §9.9） |
+| `33c4afc` | **783 张图库 / 106 条 query 复测**：推翻 160² 的「免费」结论（−9.4 pp，p=0.021），目标分辨率定为 **192²**；新增 `bench/corpus-queries.json` 与 `?queries=corpus`（实测记录 §9.9） |
+| `5c06f6b` | **M1：派生单塔接进产品路径**——`derived` 路径 + 文本塔懒加载 + `--deploy` 部署闭环；实测 1 万张 **9.0 分钟**过冲刺线（12.4 → 9.0）；修掉 ORT wasm 从 jsdelivr 外发；落地运行时零外发断言（实测记录 §9.10） |
 
 ## 4. M0 实测结论（细节见 `docs/Fstop-光圈-M0-实测记录.md`）
 
@@ -90,27 +104,34 @@
 | 附加·大图库质量复测（2026-09-24） | **783 张 / 106 条** query：R@1 224² 48.1% → 208² 45.3%（p=.51）→ **192² 44.3%（p=.34）** → 176² 42.5%（p=.15）→ **160² 38.7%（p=.021，显著）** → 112² 24.5% | **160²「免费」被推翻，目标分辨率定为 192²**（≈9.7 分钟/1 万张），见实测记录 §9.9 |
 | 附加·D3 dtype 对照（2026-09-24） | 同条件单变量：fp16 **快 13–16%**（160² 33 vs 38 ms）但体积 3.5×（164.5 vs 47.4 MB），质量同为 R@1 100% | **默认仍 q4f16**，fp16 记为可选加速档，见实测记录 §9.8 |
 | 附加·有头复测（2026-09-24） | headless 13.09 photos/s vs **有头 14.49 photos/s**（同语料 200 张 / decode 3） | headless **不偏乐观**（保守约 10%），见实测记录 §9.7 |
+| **M1·派生单塔落地（2026-09-24）** | 接进产品路径后同条件单变量：原生双塔 13.49 → **派生单塔 18.56 photos/s**（1 万张 12.4 → **9.0 分钟**），embed 中位 172 → 113 ms，文本查询 69 → 28 ms，首启权重 131.8 → **47.5 MB** | **冲刺线（≤10 分钟）实测通过**；顺带修掉 ORT wasm 从 jsdelivr 外发的违规，见实测记录 §9.10 |
 
 分阶段中位：read 4 / hash 1 / **decode 47** / **embed 154** / thumb 2 ms → 瓶颈在 embed（约 70%）。
 （⚠ **embed 154 ms 是「排队 + 计算」**，单张真实计算 ≈ 68 ms，口径见实测记录 §9.4。）
 
-**最重要的一条（2026-09-24 第二次改写）**：单张成本几乎全是**视觉塔**（≈ 59 ms / 97%），
-而视觉塔的分辨率原本被导出**钉死**在 224²/197 token —— 但那个锁是**三重常量**（位置编码 + 96 个 Reshape 常量 +
-`extract_model` 带出的 667 条 `value_info` 注解），**全部改写后同一份权重就能跑任意分辨率**。
-实测：160² 让单张向量化 62 → 40 ms（中文 R@1 仍 100%），1 万张外推 **≈7–8 分钟**。
-**所以 M1 第一步不是优化流水线、也不是换骨干，而是「按 160² 重导出一份单塔视觉塔」。** 见 §9B。
+**最重要的一条（2026-09-24 第三次改写）**：单张成本几乎全是**视觉塔**，而视觉塔的分辨率原本被导出**钉死**
+在 224²/197 token —— 但那个锁是**三重常量**（位置编码 + 96 个 Reshape 常量 + `extract_model` 带出的
+667 条 `value_info` 注解），**全部改写后同一份权重就能跑任意分辨率**。
+实测：**重导出 192² 单塔接进产品路径后，1 万张 9.0 分钟（实测，非外推）**，质量损失在 783 张 / 106 条
+query 上测不出来（p = 0.34）。**所以 M1 第一步不是优化流水线、也不是换骨干，而是「按 192² 重导出单塔」——
+这一步已经做完了。** 见 §9B 与实测记录 §9.10。
 
 ## 5. 硬约束（违反即拒绝合并）
 
 1. **`src/core/` 手写**：数据模型、索引状态机、任务队列、两个接口必须人设计、逐行可解释。
 2. **任何新增网络请求必须显式声明**：`src/` 里除白名单 `src/storage/models.ts` 外不得出现
    `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource` / `sendBeacon` / 远程 import；
-   `pnpm check:egress` 是 CI 闸门。**运行时请求日志断言（Playwright）属于 M1，尚未实现。**
+   `pnpm check:egress` 是静态闸门，**`bench/runner.mjs` 的运行时请求日志断言是第二道闸**
+   （非模型 origin 的外部 host → 非零码退出；计划 §11.4 已落地）。
 3. **`src/core/` 单测覆盖 ≥ 80%**（`pnpm test:coverage` 已设阈值）。
 4. **许可纪律**：代码 MIT；**权重不进仓库**（只给下载+校验脚本，`NOTICE` 记录来源与许可）；
    内置样例图**只收 CC0/公有领域**（带署名义务的一律不要），逐张记录见 `public/samples/manifest.json`。
-5. **AI 政策**：接受 AI 辅助，但提交者必须能逐行解释；审查标准不降低（见 `CONTRIBUTING.md`）。
-6. Conventional Commits；`main` 受保护、功能走 `feature/*`（当前 6 个提交直接落在本地 `main`，尚未推送）。
+   **派生产物（图手术切出的塔）同样按权重对待**：只本地生成、`public/models/derived/` 已 gitignore，
+   且**不得上传到任何公开仓库**（源模型卡未声明 license，上传即再分发）。
+5. **派生路径必须是可选的**：`embed.worker.ts` 探测不到派生产物时**必须回落原生双塔**，
+   且回落原因要带出来（`derivedError`）。不能因为用户没跑过 Python 生成脚本就用不了。
+6. **AI 政策**：接受 AI 辅助，但提交者必须能逐行解释；审查标准不降低（见 `CONTRIBUTING.md`）。
+7. Conventional Commits；`main` 受保护、功能走 `feature/*`（当前若干提交直接落在本地 `main`，尚未推送）。
 
 ## 6. 怎么跑
 
@@ -124,13 +145,16 @@ pnpm build               # typecheck + 生产构建
 pnpm bench                                   # 合成语料（OPFS，可复现基线）
 pnpm bench -- --source http                  # 真实语料（需先抓，见下）
 pnpm bench -- --source http --limit 200      # 分块跑
+pnpm bench -- --derived 0                    # 关掉派生单塔（A/B 对照用）
+pnpm bench -- --derived 192                  # 钉住档位（默认：探测到什么用什么）
 pnpm bench -- --query                        # 检索延迟（§八 ≤300 ms）
 pnpm bench -- --quality                      # 检索质量：中文 query 命中率（实测记录 §7）
 pnpm bench -- --quality --model Xenova/clip-vit-base-patch32   # 对照：英文单塔
 pnpm bench -- --towers                       # 拆塔 spike：ORT 指定输出是否剪枝（实测记录 §9）
 pnpm bench -- --towers --device wasm         # 同一 spike 换 EP 对照
 pnpm bench -- --decode 1                     # 解码并发（1 = 不排队，才看得到 embed 真实计算时间）
-pnpm bench -- --headed                       # 有头模式（尚未复测，建议补一次）
+pnpm bench -- --headed                       # 有头模式（实测记录 §9.7）
+# 基准结束时打印「运行时零外发」结论；出现非模型 origin 的外部 host 会以非零码退出
 
 # 数据准备（都走代理时需要 NODE_USE_ENV_PROXY=1）
 NODE_USE_ENV_PROXY=1 node scripts/fetch-models.mjs            # 权重 → .cache/models（不入库）
@@ -138,7 +162,14 @@ NODE_USE_ENV_PROXY=1 node scripts/fetch-corpus.mjs --count 800 # 真实语料 �
 NODE_USE_ENV_PROXY=1 node scripts/fetch-corpus.mjs --verify    # 校验语料 sha256
 node scripts/fetch-samples.mjs --refresh                      # 内置 CC0 样例库（入库）
 node scripts/make-heic-fixtures.mjs [含 .heic 的目录]          # HEIC 夹具（macOS 用 sips）
+
+# 派生单塔（M1：让 1 万张进 10 分钟）——产物是权重，只本地生成、不入库
+python3 bench/export-towers.py --sizes 192 --deploy 192       # 切塔 + 落到 public/models/derived/（gitignore）
+python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、不部署（质量/速度扫描用）
 ```
+
+**跑基准前先预热一次依赖**：vite 发现新依赖（如 `onnxruntime-web`）会重新预打包并**整页重载**，
+若正好发生在基准跑到一半，页面会空转（CPU 0.1%）直到超时。先 `pnpm dev` 起一次再关掉即可。
 
 结果落在 `bench/results/*.json`（gitignore）。
 
@@ -188,6 +219,10 @@ node scripts/make-heic-fixtures.mjs [含 .heic 的目录]          # HEIC 夹具
 | 指定输出列表后「输出键少了」被当成剪枝生效 | 二者是两件事：ORT 尊重 `fetches`，但 WebGPU EP 仍执行整图 | 已实测钉死（实测记录 §9.1）：1.1×，与噪声同量级。**别再按「ORT 会按需剪枝」做设计** |
 | 改完图里的常量，ORT 仍报同一个 `Add` 不兼容 | `extract_model` 会把**源图的 `value_info` 形状注解**（667 / 1472 条）一起复制出来，注解里写死 197，形状推导拿它当真 | 已修（实测记录 §9.5）：`sanitize()` 先清空 `value_info` 再重新推导。**图手术后不清注解，等于没改** |
 | `fetch-models.mjs` 分次运行会丢校验值 | 每次运行都**覆盖** `public/models/manifest.json`（`recorded` 是每次新建的数组） | 已修：与既有清单**合并**（按 model/dtype/file 去重）并写真实日期；NOTICE §5 要求该清单是校验值唯一真相源 |
+| **ORT 的 wasm 运行时默认来自 jsdelivr CDN** | transformers.js 的 `initOrtEnv` 在 `wasmPaths` 未设置时把它指向 CDN（`transformers.js:13473`）；冷缓存首访真的会发一次 25.6 MB 的请求 | 已修（实测记录 §9.10）：`configureModelRuntime()` 钉到同源资源，缺失时**抛错而非静默跳过**。之所以长期没被发现：缓存热了走 Cache API，不产生网络请求，静态扫描也看不见 → 靠 `bench/runner.mjs` 的运行时断言守 |
+| `InferenceSession.create` 报 `[webgpu] TypeError: …webgpuInit is not a function` | `onnxruntime-web/webgpu` 导出的是 **`.bundle.` 构建**（内嵌 glue），必须配 **asyncify** wasm 且**不能给 `mjs`**；给 jsep 或给 mjs 都会让它去加载不兼容的独立 glue | 已修（实测记录 §9.10）：`{ wasm: asyncify.wasm }`，与 transformers.js 一致 |
+| `transferToImageBitmap` 抛 `InvalidStateError`，整轮基准卡在 `load:models` 直到一小时超时 | 没有 2d context 的 `OffscreenCanvas` 不能 transfer | 已修：预热假图前先 `getContext('2d')` + `fillRect` |
+| 基准跑到一半页面空转（CPU 0.1%，无报错） | vite 发现**新依赖**（`onnxruntime-web`）要重新预打包 → 整页重载，基准状态丢失 | 已记入 §6：跑基准前先起一次 `pnpm dev` 预热 `node_modules/.vite/deps` |
 
 ## 9. 下一步
 
@@ -216,21 +251,24 @@ node scripts/make-heic-fixtures.mjs [含 .heic 的目录]          # HEIC 夹具
 但体积 3.5×（164.5 vs 47.4 MB）→ **默认仍用 q4f16**，fp16 记为可选加速档（实测记录 §9.8） |
 | D4 接受 11.5 分钟、降级冲刺线 | 不再需要 |
 
-**M1 的 D2 落地清单（按顺序）**：
-1. `python3 bench/export-towers.py --sizes 192` 生成视觉塔（47.5 MB）+ 文本塔（77.9 MB），
-   校验值记入 `bench/export/manifest.json`（派生产物仍是权重，**不入库**，与「权重不进仓库」同一纪律）；
-2. **派生产物只走本地生成**（已定）：源模型模型卡未声明 license，上传到 HF 等于再分发，与 NOTICE §1 冲突。
-   所以脚本留在 `scripts/` 或 `bench/`，用户机器上按需生成；**app 必须在派生产物缺失时回落到原生双塔（224²，12.3 分钟）**，
-   不能因为没跑过 Python 就用不了；
-3. `src/workers/embed.worker.ts` 换成「视觉塔 + 文本塔两个独立 session」，
-   文本塔**懒加载**（首次文本查询时才下 77.9 MB）——这一步会动 `EmbeddingProvider` 契约的实现侧；
-4. **必须实测收口**：接好之后跑 `pnpm bench -- --corpus bench/corpus`，
-   用真实语料量出 192² 的端到端 photos/s。现在的 `≈9.7 分钟` 是**外推**（±15% 轮间漂移），
-   **过线余量很薄，不实测不算数**；
-5. 索引阶段的预处理也要跟着改：decode 侧直接给到 192²（现在给 512² 再由 processor 缩），
-   可再省下画布缩放 + 归一化的开销。
-6. 质量再往上加码（可选）：`bench/corpus-queries.json` 目前 106 条、来自 Commons 标题，
-   可以再补一批**人工精编**的 query（更像真实用户问法）来交叉验证 192² 的结论。
+**M1 的 D2 落地清单（全部完成，2026-09-24）**：
+1. ✅ `python3 bench/export-towers.py --sizes 192 --deploy 192` 生成视觉塔（47.5 MB）+ 文本塔（77.9 MB），
+   校验值记入 `bench/export/manifest.json`，并落到 app 能发现的位置 `public/models/derived/`（**已 gitignore，不入库**）；
+2. ✅ **派生产物只走本地生成**（已定）：源模型模型卡未声明 license，上传到 HF 等于再分发，与 NOTICE §1 冲突。
+   生成脚本留在 `bench/`，用户机器上按需跑；**app 在派生产物缺失时回落原生双塔**（224²，12.4 分钟），
+   回落原因写进 `EmbedInitResult.derivedError`（不静默）；
+3. ✅ `src/workers/embed.worker.ts` 新增 `derived` 路径：视觉塔 + 文本塔两个独立 ORT 会话，
+   文本塔**懒加载**（首次文本查询才下 77.9 MB，就绪 520 ms）；新增 `warmupText()` 与 `derivedBytes` 上报；
+4. ✅ **已实测收口**：同条件单变量对照 13.49 → **18.56 photos/s**（1 万张 12.4 → **9.0 分钟**），
+   `embed` 中位 172 → 113 ms，文本查询 69 → 28 ms，首启权重 131.8 → 47.5 MB（实测记录 §9.10）；
+5. ⬜ 索引阶段的预处理仍走 512² 再缩到 192²；可直接让 decode 出 192²，省掉画布缩放；
+6. ⬜ `bench/corpus-queries.json` 目前 106 条、来自 Commons 标题，可再补一批**人工精编**的 query
+   （更像真实用户问法）交叉验证 192² 的结论。
+
+**顺带修掉的一个真违规**：ORT 的 wasm 运行时原先由 transformers.js 默认指向 **jsdelivr CDN**，
+冷缓存首访会外发一次 25.6 MB 的 wasm（证据：基准 profile 的 CacheStorage 里有该 URL 的条目）。
+已在 `configureModelRuntime()` 钉到同源资源；`bench/runner.mjs` 新增**运行时零外发断言**
+（非模型 origin 的 host 一律点名并非零码退出），计划 §11.4 的那条从人工勾选变成机器检查。
 
 ### C. M1 范围（按计划 §九）
 文件夹选择 + 权限持久化 + `navigator.storage.persist()`；`content_hash` + `deleted_at` 增量识别；

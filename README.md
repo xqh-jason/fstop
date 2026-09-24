@@ -31,7 +31,7 @@ Fstop is a search layer for a photo library you already have. It holds file hand
 
 **M0 (feasibility) complete.** Scaffold, governance files, the data model, the two core interfaces and the
 end-to-end indexing pipeline (decode → embed → thumbnail → OPFS vector matrix → SQLite) all work; the five
-M0 measurements are in. M1 (MVP) has not started.
+M0 measurements are in. M1 (MVP) is in progress: the "10k photos in 10 minutes" item has landed and been measured.
 
 Measured on an M2 / Chrome 153: 783 real CC0 photos indexed at **13.6 photos/s → 10k extrapolates to 12.3 min**
 (acceptance line 20 min, sprint target 10 min), search latency 78 ms (budget 300 ms), Chinese-query retrieval
@@ -46,9 +46,19 @@ and the single-image cost is **~97% vision tower** — the "wasted text tower" t
 The M1 decision is now settled, and it is **not** a cheaper backbone. The resolution lock turned out to be three
 constants (a `[1,197,768]` positional embedding, 96 Reshape constants, plus 667 stale `value_info` shape
 annotations that `extract_model` copies along), and rewriting all three makes the same weights run at any
-`(n²+1)` token count. Re-exporting the vision tower as a **192² (145-token) single tower** extrapolates 10k
-photos to **~9.7 min (sprint line)**, shrinks the first-load download from 131.8 MB to 47.5 MB (the text tower,
-77.9 MB, can lazy-load on first query), and drops text queries from 78 ms to ~27 ms.
+`(n²+1)` token count. The re-exported **192² (145-token) single tower** is now wired into the product path
+(`src/workers/embed.worker.ts` picks it up when the locally generated artifacts are present, and falls back to
+the stock dual-tower path when they are not — no Python, still works, just slower). Same-corpus A/B, one
+variable changed:
+
+| embed path                         | photos/s  | 10k photos  | embed median | text query | first-load weights |
+| ---------------------------------- | --------- | ----------- | ------------ | ---------- | ------------------ |
+| stock dual tower @224²             | 13.49     | 12.4 min    | 172 ms       | 69 ms      | 131.8 MB           |
+| **re-exported single tower @192²** | **18.56** | **9.0 min** | **113 ms**   | **28 ms**  | **47.5 MB**        |
+
+**The 10-minute sprint line is met, measured rather than extrapolated.** The derived artifacts are weights
+(a rewrite of weights whose upstream model card declares no license), so they are generated locally by
+`bench/export-towers.py --deploy 192`, served from a gitignored directory, and never redistributed.
 
 Which resolution, and why not the cheaper one: on the 39-photo sample set **160²** looked free (R@1 still
 100%), but that sample cannot tell 100% from 87%. Re-running on a **783-photo gallery with 106 Chinese queries**
@@ -57,7 +67,15 @@ loses **−9.4 pp R@1 (p = 0.021)**, while 208²/192²/176² are statistically i
 (p = 0.51/0.34/0.15) — so **192² is the largest reduction whose quality loss is not measurable**, and 160²
 stays available as a fast mode. A dtype comparison (same page, same inputs, one variable) shows **fp16 is
 13–16% faster than q4f16** but 3.5× the bytes, so q4f16 stays the default.
-Details: `docs/Fstop-光圈-M0-实测记录.md` §9.
+
+One violation came out of the M1 wiring: `@huggingface/transformers` defaults ONNX Runtime's `wasmPaths` to a
+**jsdelivr CDN**, so a cold first visit really did fetch a 25.6 MB wasm runtime from a third party (found by
+grepping the bench profile's CacheStorage for the CDN URL — hot caches hide it, because it then comes from the
+Cache API and produces no network request at all). It is now pinned to a same-origin asset, and `bench/runner.mjs`
+asserts **zero external requests other than the model origin** at runtime, failing the run with a non-zero exit
+code otherwise. The static egress check cannot see inside dependencies; this is the second gate.
+
+Details: `docs/Fstop-光圈-M0-实测记录.md` §9 (the M1 landing is §9.10).
 
 Documents, in reading order:
 

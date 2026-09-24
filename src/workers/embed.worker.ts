@@ -29,8 +29,10 @@ import {
   DEFAULT_DTYPE,
   DEFAULT_MODEL_ID,
   configureModelRuntime,
+  discoverDerivedTowers,
   modelSpec,
 } from '../storage/models'
+import { createDerivedRuntime } from './embed-derived'
 
 /** transformers.js 的张量最小形状；这里只用到 `dims` 与 `data` */
 interface TensorLike {
@@ -42,6 +44,10 @@ export interface EmbedWorkerOptions {
   readonly modelId?: string
   readonly dtype?: Dtype
   readonly device?: 'webgpu' | 'wasm'
+  /** 派生单塔（图手术导出）走的分辨率；给了就只认这一档，探测不到即回落原生双塔 */
+  readonly derivedResolution?: number
+  /** 显式关闭派生路径（基准里做 A/B 用） */
+  readonly useDerived?: boolean
 }
 
 export interface EmbedInitResult {
@@ -51,12 +57,26 @@ export interface EmbedInitResult {
   readonly warmupMs: number
   /** true = 单文件双塔，每次调用都会把另一塔也算一遍 */
   readonly dualTower: boolean
+  /** 实际走的是哪条路径：派生单塔 / 原生单文件双塔 / 原生分塔 */
+  readonly path: 'derived' | 'stock-dual' | 'stock-split'
+  /** 派生路径的视觉塔分辨率（原生路径为 undefined） */
+  readonly derivedResolution?: number
+  /** 派生路径的下载体积（字节）：视觉塔常驻、文本塔懒加载，首启只付视觉塔 */
+  readonly derivedBytes?: { readonly vision: number; readonly text: number }
+  /** 派生路径探测/建会话失败的原因（**不静默**：回落了也要能看见为什么） */
+  readonly derivedError?: string
 }
 
 export interface EmbedService {
   init(options: EmbedWorkerOptions): Promise<EmbedInitResult>
   embedImage(bitmap: ImageBitmap): Promise<Float32Array>
   embedText(text: string): Promise<Float32Array>
+  /**
+   * 显式预热文本侧。派生路径下文本塔是**懒加载**的（77.9 MB 不该在首启就下），
+   * 所以 `init` 不会碰它；要在计时里排除建会话成本，就先调这个。
+   * 返回文本侧预热耗时（ms）。
+   */
+  warmupText(): Promise<number>
 }
 
 /** 输出名不一致（`image_embeds` / `text_embeds` / `pooler_output`），按优先级取第一个命中的 */
@@ -108,8 +128,27 @@ export function firstEmbedding(outputs: Record<string, unknown>): TensorLike {
 interface LoadedModel {
   readonly loadMs: number
   readonly dualTower: boolean
+  readonly path: 'derived' | 'stock-dual' | 'stock-split'
+  readonly derivedResolution?: number
+  readonly derivedBytes?: { readonly vision: number; readonly text: number }
+  readonly derivedError?: string
+  /** 预热视觉侧：各路径按自己的输入尺寸造一张假图跑一次（把内核编译从计时里摘掉） */
+  readonly warmupImage: () => Promise<void>
+  /** 文本侧是否在 init 时一并预热（派生路径为 false：文本塔懒加载） */
+  readonly warmupTextInInit: boolean
   readonly embedImage: (bitmap: ImageBitmap) => Promise<Float32Array>
   readonly embedText: (text: string) => Promise<Float32Array>
+}
+
+/** 造一张假图当预热输入（各路径的实际输入尺寸不同，由调用方决定边长） */
+function blankBitmap(size: number): ImageBitmap {
+  const canvas = new OffscreenCanvas(size, size)
+  // 必须先拿到 2d context：没有 context 的 OffscreenCanvas 调 transferToImageBitmap 会抛
+  // InvalidStateError（实测踩过：init 永远不 resolve，整轮基准卡在 load:models）
+  const context = canvas.getContext('2d')
+  if (context === null) throw new Error('OffscreenCanvas 2d context 不可用')
+  context.fillRect(0, 0, size, size)
+  return canvas.transferToImageBitmap()
 }
 
 async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
@@ -153,6 +192,54 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
     return vector
   }
 
+  // ── 优先走派生单塔（图手术导出，实测记录 §9.5/§9.9）──────────────────────────
+  // 原生单文件双塔每次调用都要把另一塔也算一遍，且视觉塔分辨率被导出写死在 224²（197 token）。
+  // 派生塔把 192² 档的 1 万张外推推进 10 分钟冲刺线，质量损失在 783 张 / 106 条 query 上测不出。
+  // 探测不到就回落（可选加速路径，不是硬依赖），但**失败原因必须带出去**——静默回落是 M0 的教训。
+  let derivedError: string | undefined
+  if (options.useDerived !== false && spec.towers === 'single-file') {
+    try {
+      const plan = await discoverDerivedTowers(
+        options.derivedResolution === undefined
+          ? { modelId }
+          : { modelId, resolution: options.derivedResolution },
+      )
+      if (plan === null) {
+        derivedError =
+          options.derivedResolution === undefined
+            ? '本地没有派生产物（缺 /models/derived/manifest.json 或模型不匹配）'
+            : `本地没有 ${options.derivedResolution}² 的派生产物`
+      } else {
+        // 分词器仍取自 HF 仓库：只有几 MB，且与权重档位无关（切塔不改词表）
+        const tokenizer = await AutoTokenizer.from_pretrained(modelId)
+        const encodeDerived = tokenizer as unknown as (text: string) => Record<string, unknown>
+        const runtime = await createDerivedRuntime(plan, { encode: encodeDerived })
+        const loadMs = Math.round(performance.now() - loadStarted)
+        console.log(
+          `[embed] 派生单塔就绪：${plan.resolution}²（${plan.vision.file}，视觉塔建会话 ${runtime.visionLoadMs} ms，文本塔懒加载）`,
+        )
+        const embedImage = async (bitmap: ImageBitmap): Promise<Float32Array> =>
+          assertDim(await runtime.embedImage(bitmap))
+        return {
+          loadMs,
+          dualTower: false,
+          path: 'derived',
+          derivedResolution: plan.resolution,
+          derivedBytes: { vision: plan.vision.bytes, text: plan.text.bytes },
+          warmupImage: async () => {
+            await embedImage(blankBitmap(plan.resolution))
+          },
+          warmupTextInInit: false,
+          embedImage,
+          embedText: async (input) => assertDim(await runtime.embedText(input)),
+        }
+      }
+    } catch (error) {
+      derivedError = error instanceof Error ? error.message : String(error)
+      console.warn(`[embed] 派生塔不可用，回落原生路径：${derivedError}`)
+    }
+  }
+
   // 分塔模型必须显式用任务专属类：`AutoModel` 与 `pipeline('feature-extraction')` 都会解析成
   // 双塔 `CLIPModel`（实测：文本调用报缺 `pixel_values`），单塔推理根本拿不到。
   if (spec.towers === 'split') {
@@ -165,24 +252,32 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
     const callText = text as unknown as (
       inputs: Record<string, unknown>,
     ) => Promise<Record<string, unknown>>
+    const embedImage = async (bitmap: ImageBitmap): Promise<Float32Array> =>
+      assertDim(
+        normalize(
+          embeddingFor(await callVision(await prepare(toRawImage(bitmap))), 'image_embeds').data,
+        ),
+      )
+    const embedText = async (input: string): Promise<Float32Array> =>
+      assertDim(
+        normalize(
+          embeddingFor(
+            await callText(encode([input], { padding: true, truncation: true })),
+            'text_embeds',
+          ).data,
+        ),
+      )
     return {
       loadMs,
       dualTower: false,
-      embedImage: async (bitmap) =>
-        assertDim(
-          normalize(
-            embeddingFor(await callVision(await prepare(toRawImage(bitmap))), 'image_embeds').data,
-          ),
-        ),
-      embedText: async (input) =>
-        assertDim(
-          normalize(
-            embeddingFor(
-              await callText(encode([input], { padding: true, truncation: true })),
-              'text_embeds',
-            ).data,
-          ),
-        ),
+      path: 'stock-split',
+      derivedError,
+      warmupImage: async () => {
+        await embedImage(blankBitmap(IMAGE_SIZE))
+      },
+      warmupTextInInit: true,
+      embedImage,
+      embedText,
     }
   }
 
@@ -232,6 +327,12 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
   return {
     loadMs,
     dualTower,
+    path: 'stock-dual',
+    derivedError,
+    warmupImage: async () => {
+      await callImage(blankBitmap(IMAGE_SIZE), dualTower)
+    },
+    warmupTextInInit: true,
     embedImage: (bitmap) => callImage(bitmap, dualTower),
     embedText: (text) => callText(text, dualTower),
   }
@@ -243,13 +344,20 @@ Comlink.expose({
   async init(options: EmbedWorkerOptions): Promise<EmbedInitResult> {
     const instance = await (service ??= load(options))
     const started = performance.now()
-    await instance.embedText('预热')
+    // 视觉侧预热：各路径按自己的输入尺寸跑一张假图，把内核编译从首张照片的计时里摘掉。
+    await instance.warmupImage()
+    // 文本侧只在原生路径一并预热：派生路径的文本塔是懒加载的（77.9 MB），要预热请显式调 warmupText
+    if (instance.warmupTextInInit) await instance.embedText('预热')
     return {
       modelId: options.modelId ?? DEFAULT_MODEL_ID,
       dim: modelSpec(options.modelId ?? DEFAULT_MODEL_ID).dim,
       loadMs: instance.loadMs,
       warmupMs: Math.round(performance.now() - started),
       dualTower: instance.dualTower,
+      path: instance.path,
+      derivedResolution: instance.derivedResolution,
+      derivedBytes: instance.derivedBytes,
+      derivedError: instance.derivedError,
     }
   },
   async embedImage(bitmap: ImageBitmap) {
@@ -257,5 +365,11 @@ Comlink.expose({
   },
   async embedText(text: string) {
     return (await (service ??= load({}))).embedText(text)
+  },
+  async warmupText(): Promise<number> {
+    const instance = await (service ??= load({}))
+    const started = performance.now()
+    await instance.embedText('预热')
+    return Math.round(performance.now() - started)
   },
 } satisfies EmbedService)

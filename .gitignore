@@ -24,3 +24,5 @@ bench/fixtures/
 bench/corpus/
 # 拆塔/降分辨率 spike 的派生产物（图手术导出，与 .cache 同一纪律：仓库不分发权重）
 bench/export/
+# 派生产物（图手术切出的单塔）是权重：只在本地生成、只在本机服务，永不入库（NOTICE §1）
+public/models/derived/

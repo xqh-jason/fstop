@@ -128,6 +128,30 @@ async function main() {
     context.on('requestfailed', (request) => {
       console.log(`[http failed] ${request.url()} ${request.failure()?.errorText ?? ''}`)
     })
+    // 运行时「零外发」断言：计划 §11.4 要求把承诺变成机器检查，静态扫描（check-egress.mjs）
+    // 看不到依赖内部的请求。
+    // 口径按计划原文：「除模型 origin 外零请求」——所以允许模型下载源（冷缓存时权重/分词器
+    // 确实要从这里拉），其余任何 host（CDN、遥测、分析）都点名并以非零码退出。
+    // 实测参考：缓存热时（transformers.js 走 Cache API，不是 HTTP 缓存）连模型 origin 都不会出现。
+    const egressAllow = new Set([
+      'huggingface.co',
+      'cdn-lfs.huggingface.co',
+      'cdn-lfs-us-1.huggingface.co',
+      'hf-mirror.com',
+      ...arg('egress-allow', '')
+        .split(',')
+        .map((host) => host.trim())
+        .filter((host) => host !== ''),
+    ])
+    const egress = new Map()
+    context.on('request', (request) => {
+      const url = request.url()
+      if (!/^https?:/.test(url)) return
+      if (/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/)/.test(url)) return
+      const host = new URL(url).host
+      egress.set(host, (egress.get(host) ?? 0) + 1)
+      console.log(`[egress${egressAllow.has(host) ? ' 模型 origin' : ''}] ${url}`)
+    })
 
     const query = new URLSearchParams({
       count: COUNT,
@@ -141,6 +165,7 @@ async function main() {
       queries: arg('queries', 'samples'),
       gallery: arg('gallery', ''),
       sizes: arg('sizes', ''),
+      derived: arg('derived', ''),
       vfs: `fstop-vfs-bench-${Date.now()}`,
     })
     const pagePath = EXPORTED_MODE
@@ -309,8 +334,20 @@ async function main() {
       )
     } else {
       console.log(`dualTower=${result.model.dualTower}`)
+      console.log(
+        `嵌入路径：${result.model.path}${result.model.derivedResolution !== undefined ? `（视觉塔 ${result.model.derivedResolution}²）` : ''}${result.model.derivedError !== undefined ? `  回落原因：${result.model.derivedError}` : ''}`,
+      )
+      if (result.model.derivedBytes !== undefined) {
+        const { vision, text } = result.model.derivedBytes
+        console.log(
+          `派生产物：视觉塔 ${(vision / 1024 / 1024).toFixed(1)} MB + 文本塔 ${(text / 1024 / 1024).toFixed(1)} MB（懒加载）`,
+        )
+      }
       console.log(`语料：${JSON.stringify(result.corpus)}`)
       console.log(`照片数：${result.photos}  解码并发：${result.decodeConcurrency}`)
+      if (result.textWarmupMs !== null && result.textWarmupMs !== undefined) {
+        console.log(`文本侧：就绪 ${result.textWarmupMs} ms，首次查询 ${result.textSearchMs} ms`)
+      }
       console.log(
         `端到端：${result.indexSeconds} s → ${result.photosPerSecond} photos/s（1 万张外推 ${result.projected10kMinutes} 分钟）`,
       )
@@ -318,6 +355,23 @@ async function main() {
       console.log(`入库：${JSON.stringify(result.dbStats)}  向量槽位：${result.vectorSlots}`)
     }
     console.log(`结果 → ${file}`)
+    // 断言口径：「除模型 origin 外零请求」。模型 origin 之外的任何 host 都算失败。
+    const offenders = [...egress.entries()].filter(([host]) => !egressAllow.has(host))
+    const modelHosts = [...egress.entries()].filter(([host]) => egressAllow.has(host))
+    if (egress.size === 0) {
+      console.log('✓ 运行时零外发：除本机 dev server 外没有任何请求')
+    } else if (offenders.length === 0) {
+      console.log(
+        `✓ 运行时零外发：只有模型 origin ${modelHosts.map(([host, count]) => `${host}×${count}`).join('、')}`,
+      )
+    } else {
+      console.error(`✗ 运行时零外发断言失败：出现 ${offenders.length} 个非模型 origin 的外部 host`)
+      for (const [host, count] of offenders) console.error(`    ${host} × ${count}`)
+      if (modelHosts.length > 0) {
+        console.log(`（模型 origin 属允许范围：${modelHosts.map(([host]) => host).join('、')}）`)
+      }
+      process.exitCode = 1
+    }
     if (consoleErrors.length > 0) console.error(`页面错误：${consoleErrors.join(' | ')}`)
   } finally {
     // 浏览器必须在这里关：写在 try 末尾的话，一旦中途抛错/被 Ctrl-C，Chrome 会带着

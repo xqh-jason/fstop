@@ -25,7 +25,16 @@ Fstop 本身以 MIT 许可发布，见 `LICENSE`。
 **派生产物同样按权重对待**：`bench/export-towers.py` 会用图手术从源权重切出单塔 / 低分辨率变体
 （`bench/export/`，已 gitignore）。这些文件**是权重**（源权重的改写版），
 因此同样**不进仓库、不进 `public/`**，只在本地生成，校验值见 `bench/export/manifest*.json`。
-分发方式（本地生成 or 自建仓库）是 M1 的待决项，见 `docs/Fstop-光圈-交接说明.md` §9B。
+
+**分发方式已定：只走本地生成**（`docs/Fstop-光圈-交接说明.md` §9B）。上游模型卡未声明许可，
+把派生产物上传到任何公开仓库都等于再分发，与本节结论冲突，所以不建仓库、不上 HF。
+落地方式是 `bench/export-towers.py --deploy <size>`：把选定档位拷到 `public/models/derived/`
+（**已 gitignore**，仓库里永远没有权重文件），由 vite 以同源静态文件服务；
+app 启动时探测该目录的 `manifest.json`，探测不到就回落到原生双塔（慢，但一定能用）。
+
+**运行时零外发是断言，不是措辞**：`bench/runner.mjs` 在浏览器 context 上挂请求监听，
+任何非 `127.0.0.1/localhost` 的请求都会点名并使该轮基准**以非零码退出**。
+静态扫描（`scripts/check-egress.mjs`）看不到依赖内部的请求，这条断言补的就是这个缺口。
 
 ## 2. 人脸模型（M2 / P1，尚未接入）
 

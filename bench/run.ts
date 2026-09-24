@@ -137,8 +137,42 @@ async function main(): Promise<void> {
   const embed = Comlink.wrap<EmbedService>(
     new Worker(new URL('../src/workers/embed.worker.ts', import.meta.url), { type: 'module' }),
   )
-  const model = await embed.init({ modelId: MODEL_ID, dtype: DTYPE, device: 'webgpu' })
+  // 派生单塔默认开启（探测不到自动回落原生双塔）；`?derived=0` 关掉、`?derived=192` 钉住档位
+  // 注意 `||`：runner 传的是空字符串（不是缺参数），空串必须当"没指定"而不是 0
+  const derivedParam = params.get('derived') || null
+  const derivedOptions =
+    derivedParam === null
+      ? {}
+      : derivedParam === '0'
+        ? { useDerived: false }
+        : { derivedResolution: Number(derivedParam) }
+  const model = await embed.init({
+    modelId: MODEL_ID,
+    dtype: DTYPE,
+    device: 'webgpu',
+    ...derivedOptions,
+  })
   const modelLoadMs = Math.round(performance.now() - embedStarted)
+
+  // 文本侧冒烟：派生路径下文本塔是懒加载的（77.9 MB + 建会话），必须在这里确认它能用。
+  // 顺带把「首次文本查询要付多少」测出来——索引基准本身不查文本，不测就等于没验证过。
+  let textWarmupMs: number | null = null
+  let textSearchMs: number | null = null
+  try {
+    textWarmupMs = await embed.warmupText()
+    const smokeStarted = performance.now()
+    const smokeVector = await embed.embedText('雪地里的狗')
+    textSearchMs = Math.round(performance.now() - smokeStarted)
+    if (smokeVector.length !== model.dim) {
+      throw new Error(`文本向量维度 ${smokeVector.length} 与目录声明的 ${model.dim} 不一致`)
+    }
+    console.log(`文本塔就绪 ${textWarmupMs} ms，首次查询 ${textSearchMs} ms`)
+  } catch (error) {
+    console.error(
+      `文本侧冒烟失败：${error instanceof Error ? error.message : String(error)}（派生塔的文本输出名或分词器契约不匹配）`,
+    )
+    throw error
+  }
 
   const embedWorker = new Worker(new URL('../src/storage/db.worker.ts', import.meta.url), {
     type: 'module',
@@ -270,6 +304,8 @@ async function main(): Promise<void> {
     model,
     modelBytes: modelBytes(MODEL_ID, DTYPE),
     modelLoadMs,
+    textWarmupMs,
+    textSearchMs,
     database,
     decodeConcurrency: DECODE_CONCURRENCY,
     photos: timings.length,

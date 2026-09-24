@@ -37,6 +37,7 @@
     "@huggingface/transformers": "^4.3.0",
     "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "comlink": "^4.4.2",
+    "onnxruntime-web": "1.31.0-dev.20260914-8d85527a0",
     "vue": "^3.5.43"
   },
   "devDependencies": {

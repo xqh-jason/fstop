@@ -32,6 +32,7 @@ import {
   type Dtype,
 } from '../src/storage/models'
 import { DEFAULT_DECODE_OPTIONS, decodePhoto } from '../src/workers/decode'
+import { toPixelValues } from '../src/workers/embed-preprocess'
 import { HttpPhotoSource } from './http-photo-source'
 import qualityQueries from './quality-queries.json'
 import corpusQueries from './corpus-queries.json'
@@ -42,9 +43,6 @@ const DTYPE = (params.get('dtype') ?? DEFAULT_DTYPE) as Dtype
 const RUNS = Number(params.get('runs') ?? 6)
 const LIMIT = Number(params.get('limit') ?? 0)
 const TOP_K = 10
-/** 与 preprocessor_config.json 一致（CLIP 归一化常量） */
-const IMAGE_MEAN = [0.48145466, 0.4578275, 0.40821073] as const
-const IMAGE_STD = [0.26862954, 0.26130258, 0.27577711] as const
 
 interface OrtTensor {
   readonly data: ArrayLike<number>
@@ -243,37 +241,23 @@ async function main(): Promise<void> {
     return value
   }
 
-  const rawFromBitmap = (bitmap: ImageBitmap, size: number): Promise<RawImage> =>
-    (async () => {
-      const canvas = new OffscreenCanvas(size, size)
-      const context = canvas.getContext('2d')
-      if (context === null) throw new Error('OffscreenCanvas 2d context 不可用')
-      context.drawImage(bitmap, 0, 0, size, size)
-      const { data } = context.getImageData(0, 0, size, size)
-      return new RawImage(data, size, size, 4)
-    })()
-
-  /** 手工 CHW：绕开 processor 的 do_resize（否则任何输入都会被重缩回 224，112² 就白测了） */
-  const chw = (image: RawImage, proto: OrtTensor): OrtTensor => {
-    const area = image.width * image.height
-    const data = new Float32Array(3 * area)
-    for (let index = 0; index < area; index += 1) {
-      for (let channel = 0; channel < 3; channel += 1) {
-        const value = (image.data[index * 4 + channel] ?? 0) / 255
-        data[channel * area + index] =
-          (value - (IMAGE_MEAN[channel] ?? 0)) / (IMAGE_STD[channel] ?? 1)
-      }
-    }
-    return new (
-      proto.constructor as new (type: string, data: Float32Array, dims: number[]) => OrtTensor
-    )('float32', data, [1, 3, image.height, image.width])
+  /**
+   * 与产品路径**共用同一份预处理**（`src/workers/embed-preprocess.ts`）：
+   * 基准测的必须就是产品跑的，否则测出来的分辨率/质量结论不描述产品。
+   * 这里只多一步把 Float32Array 包成 ORT 张量（张量构造器从参照模型借，避免再加载一份 ORT）。
+   */
+  const feedsFrom = async (bitmap: ImageBitmap, size: number): Promise<Record<string, unknown>> => {
+    const data = await toPixelValues(bitmap, size)
+    const Tensor = pixelValues.ort_tensor.constructor as new (
+      type: string,
+      data: Float32Array,
+      dims: number[],
+    ) => OrtTensor
+    return { pixel_values: new Tensor('float32', data, [1, 3, size, size]) }
   }
 
   const decoded = await decodePhoto(blob, DEFAULT_DECODE_OPTIONS)
-  const feedsAt = async (size: number) =>
-    ({
-      pixel_values: chw(await rawFromBitmap(decoded.bitmap, size), pixelValues.ort_tensor),
-    }) as Record<string, unknown>
+  const feedsAt = (size: number) => feedsFrom(decoded.bitmap, size)
 
   // 成本：双塔（原样，fidelity=0 时没有参照模型就跳过）与四档单塔视觉
   // （同一份权重、只差 token 数）→ 分离每 token 成本与固定开销
@@ -375,9 +359,7 @@ async function main(): Promise<void> {
       const matrix = matrices.get(size)
       if (session === undefined || matrix === undefined) continue
       const started = performance.now()
-      const out = await session.run({
-        pixel_values: chw(await rawFromBitmap(bitmap, size), pixelValues.ort_tensor),
-      })
+      const out = await session.run(await feedsFrom(bitmap, size))
       imageTimings[`${size}`]?.push(performance.now() - started)
       matrix.set(out['image_embeds']?.data ?? new Float32Array(DIM), index * DIM)
     }

@@ -486,5 +486,63 @@ embed 中位随并发从 68 → 176 → 368 ms，吞吐却只从 9.05 → 12.04 
 真正落地要先把 192² 单塔接进 `embed.worker.ts`，再跑一次真实语料的 `pnpm bench -- --corpus bench/corpus`。
 外推带 ±15% 的轮间漂移，`≈9.7 分钟` 这个数**过线余量很薄**，不实测不算数。
 
+→ **已于 §9.10 实测收口。**
+
+## 9.10 M1 落地：派生单塔接进产品路径（实测）
+
+### 做了什么
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| 派生单塔路径 | `src/workers/embed.worker.ts` | 第三条路径 `derived`：探测本地产物 → 直接建 ORT 会话；探测不到**回落原生双塔**，回落原因写进 `EmbedInitResult.derivedError`（静默回落是 M0 的教训） |
+| 派生加载器 | `src/workers/embed-derived.ts` | 自己建 ORT 会话；**文本塔懒加载**（首次文本查询才下 77.9 MB）；`import()` 动态引入 ORT，走原生路径的用户不为它付体积 |
+| 共享预处理 | `src/workers/embed-preprocess.ts` | `ImageBitmap` → NCHW。**基准页与产品 Worker 现在共用同一份**，否则测出来的分辨率/质量结论不描述产品 |
+| 生成/部署闭环 | `bench/export-towers.py --deploy 192` | 把选定档位落到 `public/models/derived/`（gitignore，仓库里永远没有权重）+ 写带 sha256 的清单 |
+| 运行时零外发断言 | `bench/runner.mjs` | 监听所有非本机请求；非模型 origin 的 host 一律点名并使该轮基准**非零码退出**（计划 §11.4 的「除模型 origin 外零请求」） |
+
+### 实测（同一轮条件：200 张真实语料 / `--source http` / headless / decode 并发 3）
+
+| 嵌入路径 | 端到端 | photos/s | 1 万张外推 | embed 中位 | 文本查询 | 首启权重 |
+|---|---|---|---|---|---|---|
+| `stock-dual`（原生单文件双塔 224²） | 14.83 s | 13.49 | 12.4 分钟 | 172 ms | 69 ms | 131.8 MB |
+| **`derived`（重导出单塔 192²）** | **10.78 s** | **18.56** | **9.0 分钟** | **113 ms** | **28 ms** | **47.5 MB** |
+
+- **冲刺线过了，而且是实测**：12.4 → 9.0 分钟（−27%），比 §9.9 的外推（≈9.7 分钟）还好一点。
+- 单变量对照（只换嵌入路径，语料/并发/机器不变）。原生那轮 13.49 photos/s 与上一轮 headless 13.09 吻合（±3%），
+  说明口径可复现——这是判断 A/B 差值可信的前提。
+- 分阶段中位（derived）：read 3 / hash 1 / decode 23 / **embed 113** / thumb 2 ms；模型加载 862 ms，视觉塔建会话 343 ms。
+- 文本侧：懒加载就绪 520 ms，**首次查询 28 ms**（原生 69 ms）——单塔不白算另一塔，文本查询快 2.5×。
+- 运行时零外发断言通过，且这一轮连模型 origin 都没出现（权重全部来自 Cache API，不是 HTTP 缓存）。
+
+### 顺带抓出的一个真违规：ORT 的 wasm 运行时来自 jsdelivr CDN
+
+`@huggingface/transformers` 的 `initOrtEnv` 在 `wasmPaths` 未设置时把它指向
+`https://cdn.jsdelivr.net/npm/onnxruntime-web@<ver>/dist/`（`transformers.js:13473`）。
+**冷缓存首访会真的发一次 25.6 MB 的 wasm 请求**——「除模型权重外零出站」在那一次是破的。
+
+证据（不是推测）：在基准 profile 的 **CacheStorage**（`Default/Service Worker/CacheStorage`）里
+翻出了 `cdn.jsdelivr.net/npm/onnxruntime-web@…/ort-wasm-simd-threaded.asyncify.wasm` 的条目。
+之所以此前没被发现：缓存热了以后它走 Cache API，**根本不产生网络请求**，静态扫描也看不到依赖内部。
+
+修法：在 `configureModelRuntime()`（唯一网络模块）把 `wasmPaths` 钉到 vite 产出的同源资源，
+并在缺失时**抛错而不是静默跳过**（跳过等于回落 CDN）。运行时断言现在能守住这条。
+
+### 新踩的两个坑（都写进代码注释了）
+
+1. **`onnxruntime-web/webgpu` 导出的是 `.bundle.` 构建**（内嵌 emscripten glue），它配的 wasm 是 **asyncify** 版；
+   给 jsep 版、或额外给 `mjs`（会让它去加载独立的 glue 模块），都会在 `InferenceSession.create` 时报
+   `no available backend found. ERR: [webgpu] TypeError: …webgpuInit is not a function`。正解：asyncify wasm + 不给 mjs。
+2. **没有 2d context 的 `OffscreenCanvas` 不能 `transferToImageBitmap()`**（抛 `InvalidStateError`）。
+   预热假图时踩到：`init` 永远不 resolve，整轮基准卡在 `load:models` 等满一小时超时。预热前必须先 `getContext('2d')`。
+
+另一个环境坑（不是代码问题）：**vite 发现新依赖 `onnxruntime-web` 时会重新预打包并整页重载**，
+在基准跑到一半时重载会让页面空转（CPU 0.1%）。修法是先起一次 dev server 预热 `node_modules/.vite/deps` 再跑基准。
+
+### 还没做的
+
+- 索引侧预处理仍走 512² 再缩到 192²（decode 23 ms 里有一部分是白给的分辨率）；可直接让 decode 出 192²。
+- `bench/corpus-queries.json` 仍是 106 条 Commons 标题式 query，可补一批人工精编 query 交叉验证。
+
+
 
 

@@ -42,6 +42,8 @@ from onnx import numpy_helper
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / ".cache" / "models" / "chinese-clip-vit-b16"
 OUT_DIR = ROOT / "bench" / "export"
+# app 探测的部署目录（vite 服务 public/ 下的静态文件；目录 gitignore，权重永不入库）
+DERIVED_DIR = ROOT / "public" / "models" / "derived"
 
 VISION_IN, VISION_OUT = "pixel_values", "image_embeds"
 TEXT_IN, TEXT_OUT = ["input_ids", "attention_mask"], "text_embeds"
@@ -196,6 +198,56 @@ def sanitize(model: "onnx.ModelProto", label: str) -> dict:
     return {"staleValueInfoCleared": before, "shapeInference": status}
 
 
+# ── 部署到 app 能发现的位置（public/models/derived/，gitignore）────────────────────
+#
+# 「派生产物只走本地生成」这条纪律的落地点：生成脚本把选定档位拷到 dev server 会服务的
+# 目录，app 探测 `manifest.json` 决定走派生单塔还是回落原生双塔。仓库里永远没有权重
+# （目录 gitignore，NOTICE §1）。
+
+def deploy(
+    source: pathlib.Path,
+    suffix: str,
+    resolution: int,
+    tokens: int,
+    text: pathlib.Path,
+    deploy_dir: pathlib.Path,
+) -> None:
+    import shutil
+
+    vision = OUT_DIR / f"vision{resolution}_{suffix}.onnx"
+    if not vision.exists() or not text.exists():
+        raise SystemExit(f"缺少产物：{vision} / {text}，先不带 --deploy 跑一次导出")
+
+    deploy_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(vision, deploy_dir / vision.name)
+    shutil.copy2(text, deploy_dir / text.name)
+    manifest = {
+        "model": "Xenova/chinese-clip-vit-base-patch16",
+        "dtype": suffix,
+        "note": "本地生成的派生产物（gitignore，不入库）；由 bench/export-towers.py --deploy 生成",
+        "source": {"file": str(source.relative_to(ROOT)), "sha256": sha256(source)},
+        "vision": {
+            "file": vision.name,
+            "resolution": resolution,
+            "tokens": tokens,
+            "bytes": (deploy_dir / vision.name).stat().st_size,
+            "sha256": sha256(deploy_dir / vision.name),
+        },
+        "text": {
+            "file": text.name,
+            "bytes": (deploy_dir / text.name).stat().st_size,
+            "sha256": sha256(deploy_dir / text.name),
+        },
+    }
+    (deploy_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    )
+    print(f"\n部署 → {deploy_dir}")
+    print(f"  视觉塔 {manifest['vision']['file']}  {manifest['vision']['bytes'] / 1024 / 1024:.1f} MB")
+    print(f"  文本塔 {manifest['text']['file']}  {manifest['text']['bytes'] / 1024 / 1024:.1f} MB")
+    print(f"  清单 {deploy_dir / 'manifest.json'}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inspect", action="store_true", help="只打印图结构，不写文件")
@@ -210,6 +262,12 @@ def main() -> None:
         nargs="+",
         default=[224, 160, 112, 64],
         help="视觉塔分辨率档（16 的倍数；token = (size/16)²+1）",
+    )
+    parser.add_argument(
+        "--deploy",
+        type=int,
+        metavar="SIZE",
+        help="导出后把该档位的视觉塔 + 文本塔部署到 public/models/derived/（app 探测它决定走派生单塔）",
     )
     args = parser.parse_args()
 
@@ -289,6 +347,12 @@ def main() -> None:
         + "\n"
     )
     print(f"\n清单 → {manifest_path}")
+
+    if args.deploy is not None:
+        if args.deploy not in args.sizes:
+            raise SystemExit(f"--deploy {args.deploy} 不在本次导出的 --sizes {args.sizes} 里")
+        tokens = (args.deploy // 16) ** 2 + 1
+        deploy(source, suffix, args.deploy, tokens, text, DERIVED_DIR)
 
 
 if __name__ == "__main__":
