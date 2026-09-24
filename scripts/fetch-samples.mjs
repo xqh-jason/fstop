@@ -30,11 +30,11 @@ const USER_AGENT = 'fstop-sample-fetcher/0.1 (+https://github.com/xqh-jason/fsto
 const OUTPUT_DIR = path.join(process.cwd(), 'public', 'samples')
 const MANIFEST_PATH = path.join(OUTPUT_DIR, 'manifest.json')
 
-/** 缩略图宽度：CLIP 输入是 224，640 足够且把整库压到 8 MB 以内（§九） */
+/** Wikimedia 忽略 iiurlwidth、固定回 960px 桶（实测），单张约 190 KB，故每主题取 2 张 */
 const THUMB_WIDTH = 640
 const MIN_SOURCE_WIDTH = 800
-const PER_THEME = 3
-const MAX_TOTAL_BYTES = 8 * 1024 * 1024
+const PER_THEME = 2
+const MAX_TOTAL_BYTES = 9 * 1024 * 1024
 
 const ALLOWED_LICENSE = [/^cc0/i, /^public domain/i, /^pd[- ]/i]
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -138,7 +138,8 @@ async function discoverTheme(theme, used) {
     // 因此宽度以 URL 里的 `NNNpx-` 为准，高度按原图宽高比推导，而不是信 thumbwidth。
     const urlWidth = Number(/\/thumb\/.*\/(\d+)px-[^/]+$/.exec(thumbUrl)?.[1] ?? 0)
     const width = urlWidth > 0 ? urlWidth : (info.thumbwidth ?? 0)
-    const height = urlWidth > 0 ? Math.round((urlWidth * (info.height ?? 0)) / (info.width ?? 1)) : 0
+    const height =
+      urlWidth > 0 ? Math.round((urlWidth * (info.height ?? 0)) / (info.width ?? 1)) : 0
     if (width === 0 || height === 0) continue
 
     used.add(page.title)
@@ -220,9 +221,13 @@ async function main() {
 
   await writeFile(MANIFEST_PATH, `${JSON.stringify(entries, null, 2)}\n`)
   const megabytes = totalBytes / 1024 / 1024
-  console.log(`\n${entries.length} 张，共 ${megabytes.toFixed(2)} MB → public/samples/manifest.json`)
+  console.log(
+    `\n${entries.length} 张，共 ${megabytes.toFixed(2)} MB → public/samples/manifest.json`,
+  )
   if (totalBytes > MAX_TOTAL_BYTES) {
-    throw new Error(`样例库超过 ${MAX_TOTAL_BYTES / 1024 / 1024} MB 预算，请调小 THUMB_WIDTH 或减主题`)
+    throw new Error(
+      `样例库超过 ${MAX_TOTAL_BYTES / 1024 / 1024} MB 预算，请调小 THUMB_WIDTH 或减主题`,
+    )
   }
 }
 

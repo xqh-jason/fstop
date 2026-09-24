@@ -140,7 +140,7 @@ async function main() {
       console.log(`\n▶ ${model.id} [${dtype}]`)
       for (const entry of files) {
         const target = path.join(CACHE_DIR, model.space, dtype, path.basename(entry.file))
-        const head = await remoteBytes(model.id, entry.file)
+        const head = await withRetry(`${entry.file} HEAD`, () => remoteBytes(model.id, entry.file))
         if (head !== null && head !== entry.bytes) {
           throw new Error(
             `${entry.file}: 上游体积已变（期望 ${entry.bytes}，实际 ${head}）——先核对再更新本脚本的期望值`,
@@ -150,7 +150,7 @@ async function main() {
         const result =
           existing?.isFile() === true && existing.size === entry.bytes
             ? await fileDigest(target)
-            : await downloadFile(model.id, entry.file, target)
+            : await withRetry(`${entry.file} GET`, () => downloadFile(model.id, entry.file, target))
         if (result.bytes !== entry.bytes) {
           throw new Error(`${entry.file}: 落盘体积 ${result.bytes} ≠ 期望 ${entry.bytes}`)
         }

@@ -44,11 +44,23 @@ Fstop 本身以 MIT 许可发布，见 `LICENSE`。
 
 > 依赖尚未引入，接入时逐个核对并在此表补全实际版本与许可文件路径。
 
-## 4. 校验值
+## 4. 内置样例图片库（`public/samples/`）
+
+内置 demo 用的 39 张图片**全部来自 Wikimedia Commons 的 CC0 / 公有领域**，
+**不接受任何带署名义务的许可**（CC BY、CC BY-SA 一律不要），以免出现「一个文件一条署名链」的维护负担。
+
+逐张的来源页、作者、许可、许可链接、尺寸、字节数与 sha256 见
+**`public/samples/manifest.json`** —— 该清单由 `scripts/fetch-samples.mjs` 生成，是唯一真相源，
+禁止手改；要换图就跑 `--refresh`。注意 `discoveredBy` 只是「用哪条检索式找到的」，**不是内容标注**。
+
+## 5. 校验值
 
 **当前仓库未声明任何权重校验值**，因为尚未拉取过权重。M0 的 `scripts/fetch-models` 落地时，
 本文件必须为每个权重文件补上 `sha256`，并与 `public/models/` 中的清单保持一致。
 在此之前，任何「权重已被校验」的说法都不成立。
+
+> 状态更新（2026-09-24）：`scripts/fetch-models.mjs` 已落地，会把实测 sha256 写入
+> `public/models/manifest.json`；本文件在 M0 收口时同步该清单。
 
 ---
 

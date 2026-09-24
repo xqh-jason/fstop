@@ -32,14 +32,23 @@ const ENGLISH_CLIP = 'Xenova/clip-vit-base-patch32'
 const results: StepResult[] = []
 const output = document.getElementById('out')
 
+/** `JSON.stringify` 对函数/可调用对象返回 undefined（transformers.js 的 processor 就是可调用的），这里兜住 */
+function describeDetail(detail: unknown): string {
+  try {
+    const text = JSON.stringify(detail, null, 2)
+    return text === undefined ? String(detail) : text.slice(0, 4000)
+  } catch {
+    return String(detail)
+  }
+}
+
 function render(): void {
   if (output === null) return
   output.textContent = results
     .map((result) => {
       const head = `${result.ok ? '✓' : '✗'} ${result.name}  ${result.ms} ms`
       const body =
-        result.error ??
-        (result.detail === undefined ? '' : JSON.stringify(result.detail, null, 2).slice(0, 4000))
+        result.error ?? (result.detail === undefined ? '' : describeDetail(result.detail))
       return `${head}\n${body}`
     })
     .join('\n\n')
@@ -63,6 +72,18 @@ async function step(name: string, run: () => Promise<unknown>): Promise<unknown>
     render()
     return undefined
   }
+}
+
+/** `?only=heic,webgpu` 只跑匹配的子集，便于在没有模型的情况下快速验证单项 */
+const only =
+  params
+    .get('only')
+    ?.split(',')
+    .filter((token) => token !== '') ?? null
+
+async function maybeStep(name: string, run: () => Promise<unknown>): Promise<unknown> {
+  if (only !== null && !only.some((token) => name.includes(token))) return undefined
+  return step(name, run)
 }
 
 /** 同一个 origin 的下载在 Resource Timing 里可能因缺 Timing-Allow-Origin 而 transferSize 归零，两个都记 */
@@ -106,7 +127,7 @@ function summarize(timings: number[]): { first: number; min: number; median: num
 }
 
 async function main(): Promise<void> {
-  await step('env', async () => ({
+  await maybeStep('env', async () => ({
     dtype: DTYPE,
     device: DEVICE,
     remoteHost: env.remoteHost,
@@ -116,15 +137,20 @@ async function main(): Promise<void> {
     wasmThreads: env.backends?.onnx?.wasm?.numThreads,
   }))
 
-  await step('webgpu-adapter', async () => {
+  await maybeStep('webgpu-adapter', async () => {
     const adapter = (await navigator.gpu?.requestAdapter()) ?? null
-    if (adapter === null) return { available: false }
-    const info = (adapter as unknown as { info?: Record<string, unknown> }).info ?? {}
+    // adapter.info 在托管 Chromium 里是空的，因此再用 WebGL 的渲染器名做一次兜底判定：
+    // 出现 SwiftShader / llvmpipe 就说明是软件光栅化，性能数字不可用于验收（§5.2）
+    const canvas = document.createElement('canvas')
+    const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
+    const debugInfo = gl?.getExtension('WEBGL_debug_renderer_info') ?? null
+    const renderer = debugInfo === null ? null : gl?.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
     return {
-      available: true,
-      info,
-      features: [...adapter.features].slice(0, 8),
-      limits: { maxBufferSize: adapter.limits.maxBufferSize },
+      available: adapter !== null,
+      info: (adapter as unknown as { info?: Record<string, unknown> } | null)?.info ?? null,
+      features: adapter === null ? [] : [...adapter.features].slice(0, 6),
+      webglRenderer: renderer ?? null,
+      softwareRendering: /swiftshader|llvmpipe|software/i.test(String(renderer)),
     }
   })
 
@@ -132,13 +158,13 @@ async function main(): Promise<void> {
   env.useBrowserCache = true
 
   // ── Chinese-CLIP：单文件双塔，是本轮最关键的未知 ─────────────────────────
-  const chineseModel = await step(`load:AutoModel:${CHINESE_CLIP}[${DTYPE}]`, async () => {
+  const chineseModel = await maybeStep(`load:AutoModel:${CHINESE_CLIP}[${DTYPE}]`, async () => {
     const model = await AutoModel.from_pretrained(CHINESE_CLIP, { dtype: DTYPE, device: DEVICE })
     const session = (model as unknown as { sessions?: Record<string, unknown> }).sessions ?? {}
     return { sessions: Object.keys(session) }
   })
 
-  const chineseProcessor = await step(`load:AutoProcessor:${CHINESE_CLIP}`, () =>
+  const chineseProcessor = await maybeStep(`load:AutoProcessor:${CHINESE_CLIP}`, () =>
     AutoProcessor.from_pretrained(CHINESE_CLIP),
   )
 
@@ -196,35 +222,49 @@ async function main(): Promise<void> {
   }
 
   // ── 英文 CLIP：vision/text 分文件，作为对照 ──────────────────────────────
-  const vision = await step(`pipeline:image-feature-extraction:${ENGLISH_CLIP}[${DTYPE}]`, () =>
-    pipeline('image-feature-extraction', ENGLISH_CLIP, { dtype: DTYPE, device: DEVICE }),
+  const vision = await maybeStep(
+    `pipeline:image-feature-extraction:${ENGLISH_CLIP}[${DTYPE}]`,
+    () => pipeline('image-feature-extraction', ENGLISH_CLIP, { dtype: DTYPE, device: DEVICE }),
   )
-  await step(`image-embed:${ENGLISH_CLIP} (warm ×10)`, async () => {
+  await maybeStep(`image-embed:${ENGLISH_CLIP} (warm ×10)`, async () => {
     const run = vision as unknown as (image: unknown) => Promise<{ dims: number[] }>
     const timings = await measure(10, () => run(bitmap))
     return { ...summarize(timings), timings, resources: remoteResources() }
   })
 
-  const text = await step(`pipeline:feature-extraction:${ENGLISH_CLIP}[${DTYPE}]`, () =>
+  const text = await maybeStep(`pipeline:feature-extraction:${ENGLISH_CLIP}[${DTYPE}]`, () =>
     pipeline('feature-extraction', ENGLISH_CLIP, { dtype: DTYPE, device: DEVICE }),
   )
-  await step(`text-embed:${ENGLISH_CLIP} (warm ×10)`, async () => {
+  await maybeStep(`text-embed:${ENGLISH_CLIP} (warm ×10)`, async () => {
     const run = text as unknown as (input: string[]) => Promise<{ dims: number[] }>
     const timings = await measure(10, () => run(['a dog in the snow']))
     return { ...summarize(timings), timings }
   })
 
   // ── 第 3 项：HEIC 解码 ────────────────────────────────────────────────
-  await step('heic:createImageBitmap', async () => {
-    const candidates = ['/bench-fixtures/sample.heic', '/bench-fixtures/private/iphone.heic']
+  await maybeStep('heic:createImageBitmap', async () => {
+    const candidates = [
+      params.get('heic'),
+      '/bench/fixtures/sample-1.heic',
+      '/bench/fixtures/sample-2.heic',
+    ].filter((value): value is string => value !== null)
     for (const url of candidates) {
       const response = await fetch(url)
       if (!response.ok) continue
       const heic = await response.blob()
-      const decoded = await createImageBitmap(heic)
-      return { url, bytes: heic.size, width: decoded.width, height: decoded.height }
+      try {
+        const decoded = await createImageBitmap(heic)
+        return { url, bytes: heic.size, width: decoded.width, height: decoded.height }
+      } catch (error) {
+        return {
+          url,
+          bytes: heic.size,
+          decoded: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
     }
-    return { skipped: true, reason: '没有 HEIC 夹具，见 bench/fixtures/README' }
+    return { skipped: true, reason: '没有 HEIC 夹具，先跑 node scripts/make-heic-fixtures.mjs' }
   })
 
   render()

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <title>Fstop · M0 探针</title>
+    <title>Fstop · opfs-sahpool 多标签页探针</title>
     <style>
       body {
         background: #0e0e11;
@@ -17,20 +17,15 @@
       }
       pre {
         white-space: pre-wrap;
-        word-break: break-all;
-      }
-      .ok {
-        color: #57d98a;
-      }
-      .bad {
-        color: #ff7a45;
       }
     </style>
   </head>
   <body>
-    <h1>M0 探针</h1>
-    <p>结果写入 <code>window.__PROBE_RESULT</code>，并实时渲染到下方。</p>
-    <pre id="out">running…</pre>
-    <script type="module" src="/bench/probe.ts"></script>
+    <h1>opfs-sahpool 多标签页</h1>
+    <p>
+      参数：<code>?vfs=&lt;目录&gt;&amp;locks=1</code>；结果写入 <code>window.__DB_RESULT</code>。
+    </p>
+    <pre id="out">opening…</pre>
+    <script type="module" src="/bench/db.ts"></script>
   </body>
 </html>
