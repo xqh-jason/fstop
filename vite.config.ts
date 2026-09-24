@@ -16,7 +16,12 @@ export default defineConfig({
       // 与 sqlite-wasm，node 环境里连 import 都过不去。把它们算进阈值只会让门禁**长期假红**
       // （实测：纳入后全局 57%，门禁形同虚设）；它们由基准层覆盖——`pnpm bench` 跑的是真实
       // 索引流水线（解码 → 嵌入 → 缩略图 → OPFS 矩阵 → SQLite）。
-      include: ['src/core/**', 'src/storage/models.ts', 'src/storage/migrations.ts'],
+      include: [
+        'src/core/**',
+        'src/storage/models.ts',
+        'src/storage/migrations.ts',
+        'src/storage/photo-source-fsa.ts',
+      ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 80 },
     },
   },
