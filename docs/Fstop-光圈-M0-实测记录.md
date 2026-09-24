@@ -571,9 +571,15 @@ spike 页那份用的是页内自建的会话与它自己的预处理副本。**
   **没有类别字段**；从标题再派生一批 query 只是换汤不换药，而看图写 query 会污染 ground truth。
   要做得先让 `scripts/fetch-corpus.mjs` 把 Commons 的类别/depicts 一起抓下来（一次网络任务），
   到时候再加一批「找某类东西」型 query 做交叉验证。
-- **M1 核心已开工**：`src/core/index-queue.ts`（任务队列状态机）——无游标、`pending` 派生队列、
-  崩溃恢复 `requeueRunning`、重试上限 `MAX_ATTEMPTS`、`skipped` 为终态；13 条单测用 `node:sqlite`
-  跑真实 DDL。尚未接进 `db.worker.ts`（要等文件夹选择 + 增量扫描一起接）。
+- **M1 核心已开工**（`src/core/` 手写区）：
+  - `index-queue.ts`：任务队列状态机——无游标（`pending` 派生队列）、崩溃恢复 `requeueRunning`、
+    重试上限 `MAX_ATTEMPTS`、`skipped` 为终态；13 条单测用 `node:sqlite` 跑真实 DDL；
+  - `incremental-scan.ts`：增量识别——内容身份（`size` + 首尾 64 KB）、六种落点
+    （新增/未变/重算/移动/恢复/删除）、三条安全规则；17 条单测。**移动只改 `rel_path`，不重算向量**；
+    **空扫描拒绝把整库标记删除**（拔盘/权限失效时最坏的自动化）。
+  两者都还没接进 `db.worker.ts`（要等文件夹选择 + 权限持久化一起接）。
+- **覆盖率门禁修好了**：`pnpm test:coverage` 之前**全局红**（57%）——阈值把浏览器专属的
+  storage 模块也算进去了，它们 node 里 0%。范围收敛到 §5 约束写的那部分后，现在是 97.3% 语句 / 86.7% 分支。
 
 
 
