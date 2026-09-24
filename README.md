@@ -29,9 +29,23 @@ Fstop is a search layer for a photo library you already have. It holds file hand
 
 ## Status
 
-**Initialized.** Scaffold, governance files, data model and the two core interfaces are in place. No indexing or retrieval code yet — those land in M0/M1. Pre-1.0: expect `src/core/` to move.
+**M0 (feasibility) complete.** Scaffold, governance files, the data model, the two core interfaces and the
+end-to-end indexing pipeline (decode → embed → thumbnail → OPFS vector matrix → SQLite) all work; the five
+M0 measurements are in. M1 (MVP) has not started.
 
-The Chinese project plan (`docs/Fstop-光圈-项目计划-v0.2.md`) is the design source of truth: milestones, acceptance numbers, licence matrix and the reasoning behind each decision.
+Measured on an M2 / Chrome 153: 783 real CC0 photos indexed at **13.6 photos/s → 10k extrapolates to 12.3 min**
+(acceptance line 20 min, sprint target 10 min), search latency 78 ms (budget 300 ms), HEIC is **not** decodable
+in Chromium, and `opfs-sahpool` needs Web Locks leader election.
+
+Documents, in reading order:
+
+| File                               | What it is                                                                   |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| `docs/Fstop-光圈-项目计划-v0.2.md` | The design source of truth (Chinese): scope, stack, milestones, metrics, DoD |
+| `docs/Fstop-光圈-M0-实测记录.md`   | M0 measurements and the four places they contradict the plan                 |
+| `docs/Fstop-光圈-交接说明.md`      | Handoff: current state, environment facts, known traps, next steps           |
+
+Pre-1.0: expect `src/core/` to move.
 
 ## Development
 
