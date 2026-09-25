@@ -31,6 +31,7 @@ import { browserLockKeeper, PRIMARY_LOCK } from '../storage/tab-primary-browser'
 import { electLeader, waitToPromote } from '../storage/tab-primary'
 import type { EmbedService } from '../workers/embed.worker'
 import CapabilityPanel from '../ui/CapabilityPanel.vue'
+import PhotoWall from '../ui/PhotoWall.vue'
 
 const params = new URLSearchParams(location.search)
 const ROOT_MODE = params.get('root') ?? 'fsa'
@@ -55,6 +56,11 @@ const searching = ref(false)
 const hits = ref<readonly SearchHit[]>([])
 const searchNote = ref<string | null>(null)
 const thumbs = ref<Record<string, string>>({})
+
+/** 照片墙（全部已索引照片，万张级虚拟滚动） */
+const wallOpen = ref(false)
+const wallPhotos = ref<readonly { photoId: number; relPath: string; thumbKey: string | null }[]>([])
+const wallNote = ref<string | null>(null)
 
 let db: DbService | null = null
 let embed: EmbedService | null = null
@@ -262,6 +268,34 @@ async function runSearch(): Promise<void> {
   }
 }
 
+/**
+ * 打开照片墙：一次性取回全部已索引照片的轻量行（id/路径/缩略图键），
+ * 图片本体由 PhotoWall 按可视窗口惰性读取 + LRU 回收。
+ */
+async function openWall(): Promise<void> {
+  if (db === null) return
+  wallNote.value = '正在读取照片列表…'
+  try {
+    const rows = await db.searchRows()
+    wallPhotos.value = rows.map((row) => ({
+      photoId: row.photoId,
+      relPath: row.relPath,
+      thumbKey: row.thumbKey,
+    }))
+    wallOpen.value = true
+    wallNote.value =
+      rows.length === 0 ? '索引还是空的——先建立索引' : `共 ${rows.length} 张（仅渲染可视区域）`
+  } catch (error) {
+    wallNote.value = `读取照片列表失败：${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
+/** 照片墙的缩略图读取器（交给 PhotoWall 的缓存去管生命周期） */
+async function loadWallThumb(key: string): Promise<Blob | null> {
+  if (thumbsDir === null) return null
+  return readOpfsFile(thumbsDir, key)
+}
+
 /** 缩略图从 OPFS 读出来做 objectURL；只读当前要显示的那些 */
 async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
   if (thumbsDir === null) return
@@ -347,6 +381,12 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
         </button>
       </form>
       <p v-if="searchNote !== null" class="status">{{ searchNote }}</p>
+      <div class="row">
+        <button class="button" :disabled="db === null" @click="openWall">浏览全部照片</button>
+        <button v-if="wallOpen" class="button" @click="wallOpen = false">收起照片墙</button>
+      </div>
+      <p v-if="wallNote !== null" class="status">{{ wallNote }}</p>
+      <PhotoWall v-if="wallOpen" :photos="wallPhotos" :load-thumb="loadWallThumb" />
       <ul class="results">
         <li v-for="hit in hits" :key="hit.photoId" class="result">
           <img
