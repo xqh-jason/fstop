@@ -66,7 +66,9 @@ async function runStageProbe(page, count) {
       .slice(0, limit)
     const blobs = []
     for (const name of names) {
-      const response = await fetch(`/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`)
+      const response = await fetch(
+        `/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`,
+      )
       blobs.push({ name, blob: await response.blob() })
     }
 
@@ -175,7 +177,10 @@ async function runStageProbe(page, count) {
     }
     await vecWritable.close()
     const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0
-    out.storage = { thumbWriteMedianMs: median(thumbWriteMs), vectorWriteMedianMs: median(vectorWriteMs) }
+    out.storage = {
+      thumbWriteMedianMs: median(thumbWriteMs),
+      vectorWriteMedianMs: median(vectorWriteMs),
+    }
     return out
   }, count)
 
@@ -261,72 +266,83 @@ async function main() {
     // 注意必须用独立的 vfs 目录：主页面 boot() 会在 .fstop-vfs 里开 opfs-sahpool 实例，
     // 同名目录的第二个实例（或与主页面的写句柄重叠）会直接硬失败。
     const vfs = process.env.PROBE_VFS ?? `probe-vfs-${Date.now()}`
-    const dbResult = await page.evaluate(async (args) => {
-      const resource = performance
-        .getEntriesByType('resource')
-        .map((entry) => entry.name)
-        .find((name) => /deps\/comlink\.js/.test(name))
-      const Comlink = await import(resource ?? '/node_modules/.vite/deps/comlink.js')
-      const worker = new Worker(new URL('/src/storage/db.worker.ts', location.origin), {
-        type: 'module',
-      })
-      const db = Comlink.wrap(worker)
-      const opened = await db.open('probe', { directory: args.vfs })
-      const count = args.count
-      const now = Date.now()
-      const rows = Array.from({ length: count }, (_, i) => ({
-        relPath: `probe/photo-${String(i).padStart(4, '0')}.jpg`,
-        ext: 'jpg',
-        size: 700_000,
-        mtime: now,
-        contentHash: `hash-${i}`,
-        width: 1920,
-        height: 1440,
-        thumbKey: `hash-${i}.jpg`,
-        modelId: 'Xenova/chinese-clip-vit-base-patch16',
-        dim: 512,
-        matrixOffset: i,
-      }))
-      const t0 = performance.now()
-      await db.writeBatch(rows)
-      const writeBatchMs = Math.round(performance.now() - t0)
-      const t1 = performance.now()
-      const known = await db.knownPhotos()
-      const knownMs = Math.round(performance.now() - t1)
-      const t2 = performance.now()
-      const plan = {
-        inserts: [],
-        reindex: [],
-        moves: [],
-        restores: [],
-        unchanged: known.map((photo) => ({ id: photo.id, entry: { relPath: photo.relPath, size: 1, mtime: now, contentHash: photo.contentHash ?? '' } })),
-        deleted: [],
-      }
-      const applied = await db.applyScan(plan, Date.now())
-      void applied
-      const planMs = Math.round(performance.now() - t2)
-      const t3 = performance.now()
-      const jobs = await db.claimJobs('embed', count, Date.now())
-      const claimMs = Math.round(performance.now() - t3)
-      const completeMs = []
-      for (const job of jobs) {
-        const t = performance.now()
-        await db.completeJob(job.jobId, Date.now())
-        completeMs.push(Math.round(performance.now() - t))
-      }
-      completeMs.sort((a, b) => a - b)
-      return {
-        opened,
-        writeBatchMs,
-        writeBatchPerRow: Number((writeBatchMs / count).toFixed(2)),
-        knownMs,
-        planMs,
-        claimMs,
-        completeMedianMs: completeMs[Math.floor(completeMs.length / 2)] ?? 0,
-        completeMaxMs: completeMs[completeMs.length - 1] ?? 0,
-        stats: await db.stats(),
-      }
-    }, { count: Math.max(20, PHOTOS), vfs })
+    const dbResult = await page.evaluate(
+      async (args) => {
+        const resource = performance
+          .getEntriesByType('resource')
+          .map((entry) => entry.name)
+          .find((name) => /deps\/comlink\.js/.test(name))
+        const Comlink = await import(resource ?? '/node_modules/.vite/deps/comlink.js')
+        const worker = new Worker(new URL('/src/storage/db.worker.ts', location.origin), {
+          type: 'module',
+        })
+        const db = Comlink.wrap(worker)
+        const opened = await db.open('probe', { directory: args.vfs })
+        const count = args.count
+        const now = Date.now()
+        const rows = Array.from({ length: count }, (_, i) => ({
+          relPath: `probe/photo-${String(i).padStart(4, '0')}.jpg`,
+          ext: 'jpg',
+          size: 700_000,
+          mtime: now,
+          contentHash: `hash-${i}`,
+          width: 1920,
+          height: 1440,
+          thumbKey: `hash-${i}.jpg`,
+          modelId: 'Xenova/chinese-clip-vit-base-patch16',
+          dim: 512,
+          matrixOffset: i,
+        }))
+        const t0 = performance.now()
+        await db.writeBatch(rows)
+        const writeBatchMs = Math.round(performance.now() - t0)
+        const t1 = performance.now()
+        const known = await db.knownPhotos()
+        const knownMs = Math.round(performance.now() - t1)
+        const t2 = performance.now()
+        const plan = {
+          inserts: [],
+          reindex: [],
+          moves: [],
+          restores: [],
+          unchanged: known.map((photo) => ({
+            id: photo.id,
+            entry: {
+              relPath: photo.relPath,
+              size: 1,
+              mtime: now,
+              contentHash: photo.contentHash ?? '',
+            },
+          })),
+          deleted: [],
+        }
+        const applied = await db.applyScan(plan, Date.now())
+        void applied
+        const planMs = Math.round(performance.now() - t2)
+        const t3 = performance.now()
+        const jobs = await db.claimJobs('embed', count, Date.now())
+        const claimMs = Math.round(performance.now() - t3)
+        const completeMs = []
+        for (const job of jobs) {
+          const t = performance.now()
+          await db.completeJob(job.jobId, Date.now())
+          completeMs.push(Math.round(performance.now() - t))
+        }
+        completeMs.sort((a, b) => a - b)
+        return {
+          opened,
+          writeBatchMs,
+          writeBatchPerRow: Number((writeBatchMs / count).toFixed(2)),
+          knownMs,
+          planMs,
+          claimMs,
+          completeMedianMs: completeMs[Math.floor(completeMs.length / 2)] ?? 0,
+          completeMaxMs: completeMs[completeMs.length - 1] ?? 0,
+          stats: await db.stats(),
+        }
+      },
+      { count: Math.max(20, PHOTOS), vfs },
+    )
     console.log(`入库成本单量（产品同款 worker，vfs=${vfs}）：`)
     console.log(JSON.stringify(dbResult, null, 2))
     await context.close()
@@ -337,33 +353,43 @@ async function main() {
   // 不清的话第二轮扫描判定「全都未变」→ 一张都不用算，量出来的是 0。
   // 保留 profile 是为了让模型权重留在 CacheStorage 里（冷缓存下载会混进耗时）。
   if (process.env.PROBE_RESET !== '0') {
-    const removed = await page.evaluate(async (names) => {
-      const root = await navigator.storage.getDirectory()
-      const gone = []
-      for (const name of names) {
-        try {
-          await root.removeEntry(name, { recursive: true })
-          gone.push(name)
-        } catch {
-          // 本来就没有
+    const removed = await page.evaluate(
+      async (names) => {
+        const root = await navigator.storage.getDirectory()
+        const gone = []
+        for (const name of names) {
+          try {
+            await root.removeEntry(name, { recursive: true })
+            gone.push(name)
+          } catch {
+            // 本来就没有
+          }
         }
-      }
-      return gone
-    }, ['.fstop-vfs', 'fstop-vectors', 'fstop-thumbs', OPFS_DIR])
+        return gone
+      },
+      ['.fstop-vfs', 'fstop-vectors', 'fstop-thumbs', OPFS_DIR],
+    )
     console.log(`重置：清掉 ${removed.join(', ') || '（本来就没有）'}`)
   }
 
   const seeded = await page.evaluate(async (limit) => {
     const manifest = await (await fetch('/bench/corpus/manifest.json')).json()
-    const names = manifest.map((entry) => entry.file).filter(Boolean).slice(0, limit)
+    const names = manifest
+      .map((entry) => entry.file)
+      .filter(Boolean)
+      .slice(0, limit)
     const root = await navigator.storage.getDirectory()
     const directory = await root.getDirectoryHandle('probe-corpus', { create: true })
     let bytes = 0
     for (const name of names) {
-      const response = await fetch(`/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`)
+      const response = await fetch(
+        `/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`,
+      )
       if (!response.ok) throw new Error(`语料取回失败 HTTP ${response.status}：${name}`)
       const blob = await response.blob()
-      const writable = await (await directory.getFileHandle(name, { create: true })).createWritable()
+      const writable = await (
+        await directory.getFileHandle(name, { create: true })
+      ).createWritable()
       await writable.write(blob)
       await writable.close()
       bytes += blob.size
@@ -397,9 +423,7 @@ async function main() {
   const curve = []
   let finished = false
   while (Date.now() - started < TIMEOUT_MS) {
-    const text = await page.evaluate(
-      () => document.querySelector('.status')?.textContent ?? '',
-    )
+    const text = await page.evaluate(() => document.querySelector('.status')?.textContent ?? '')
     const done = Number(text.match(/(\d+)\/(\d+)/)?.[1] ?? -1)
     const total = Number(text.match(/(\d+)\/(\d+)/)?.[2] ?? -1)
     curve.push({ at: Date.now() - started, text, done, total })
@@ -413,23 +437,25 @@ async function main() {
   const { profile } = await session.send('Profiler.stop')
 
   // —— 报告 ——
-  const sampled = curve.filter((point, index) => index === 0 || point.text !== curve[index - 1].text)
+  const sampled = curve.filter(
+    (point, index) => index === 0 || point.text !== curve[index - 1].text,
+  )
   console.log(`\n进度曲线（${sampled.length} 个变化点）：`)
   let previous = { at: 0, done: 0 }
   for (const point of sampled) {
     const deltaDone = point.done - previous.done
     const deltaMs = point.at - previous.at
     const per = deltaDone > 0 ? ` | ${(deltaMs / deltaDone).toFixed(0)} ms/张` : ''
-    console.log(
-      `  ${(point.at / 1000).toFixed(1)}s  ${point.text}${per}`,
-    )
+    console.log(`  ${(point.at / 1000).toFixed(1)}s  ${point.text}${per}`)
     previous = { at: point.at, done: point.done > 0 ? point.done : previous.done }
   }
 
   console.log(`\n总计：${(elapsed / 1000).toFixed(1)} s，结束=${finished}`)
   const last = curve[curve.length - 1]
   if (last !== undefined && last.done > 0) {
-    console.log(`每张平均：${(elapsed / last.done).toFixed(0)} ms（${(1000 / (elapsed / last.done)).toFixed(2)} 张/秒）`)
+    console.log(
+      `每张平均：${(elapsed / last.done).toFixed(0)} ms（${(1000 / (elapsed / last.done)).toFixed(2)} 张/秒）`,
+    )
   }
 
   console.log('\nCPU 采样自身耗时 top 25（ms）：')

@@ -27,6 +27,8 @@ import { opfsDirectory, readOpfsFile } from '../storage/opfs'
 import { OpfsPhotoSource } from '../storage/photo-source-opfs'
 import { FileSystemAccessSource } from '../storage/photo-source-fsa'
 import { VectorMatrix } from '../storage/vector-matrix'
+import { browserLockKeeper, PRIMARY_LOCK } from '../storage/tab-primary-browser'
+import { electLeader, waitToPromote } from '../storage/tab-primary'
 import type { EmbedService } from '../workers/embed.worker'
 import CapabilityPanel from '../ui/CapabilityPanel.vue'
 
@@ -79,17 +81,52 @@ const progressText = computed(() => {
   return ''
 })
 
+/** 本页是否持有主锁；从页只读、不给索引按钮 */
+const isLeader = ref(true)
+/** 主锁当前的释放函数（elect 拿到后替换，onUnmounted 调用） */
+let releaseIfLeader: () => void = () => {}
+
 onMounted(async () => {
   document.body.dataset.ready = 'false'
   capabilities.value = await detectCapabilities()
-  await boot()
+  await elect()
   document.body.dataset.ready = String(ready.value)
 })
 
+/** 页面卸载：abort 索引、关矩阵、放主锁（放锁是 follower 接管的前提） */
 onUnmounted(() => {
   controller?.abort()
   void vectors?.close()
+  releaseIfLeader()
 })
+
+/** 选主：抢到 → 主页走 boot；抢不到 → 只读从页，同时排队等接管 */
+async function elect(): Promise<void> {
+  try {
+    const outcome = await electLeader(browserLockKeeper(), PRIMARY_LOCK)
+    releaseIfLeader = outcome.releaseIfLeader
+    if (outcome.role === 'leader') {
+      isLeader.value = true
+      await boot()
+      return
+    }
+    isLeader.value = false
+    notice.value = '另一个标签页正在管理索引，本页只读。关闭那个标签后本页会自动接管。'
+    document.body.dataset.ready = 'true' // 从页界面是可用的（可搜索），不算初始化失败
+    // 排队等接管：主页释放的瞬间本页重新走完整 boot（含 db worker）
+    void waitToPromote(browserLockKeeper(), PRIMARY_LOCK, async () => {
+      isLeader.value = true
+      notice.value = null
+      document.body.dataset.ready = 'false'
+      await boot()
+      document.body.dataset.ready = String(ready.value)
+    })
+  } catch (error) {
+    // 没有 Web Locks 的环境（非 Chromium）：保持原行为，直接尝试 boot 让真实报错浮出来
+    void error
+    await boot()
+  }
+}
 
 async function boot(): Promise<void> {
   try {
@@ -280,10 +317,10 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
         <button
           v-if="!indexing"
           class="button button--primary"
-          :disabled="source === null"
+          :disabled="source === null || !isLeader"
           @click="startIndex"
         >
-          建立索引
+          {{ isLeader ? '建立索引' : '从标签页：只读' }}
         </button>
         <button v-else class="button" @click="stopIndex">停止</button>
       </div>

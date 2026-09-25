@@ -161,8 +161,7 @@ export function completeJob(db: QueueDatabase, jobId: number, now: number = Date
     // 已是 done 属于幂等收尾（writeBatch 落库时可能已经把任务标成 done，再调一次是正常路径）。
     // 对 done 视为成功；对 failed/skipped 这些真正不该到这里的状态保持抛错。
     const row = db.prepare(`SELECT status FROM jobs WHERE id = ?`).get(jobId) as
-      | { status?: string }
-      | undefined
+      { status?: string } | undefined
     if (row?.status === 'done') return
     throw new Error(`任务 ${jobId} 不在可完成状态（已 done/failed/skipped？）`)
   }

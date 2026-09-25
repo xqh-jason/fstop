@@ -52,41 +52,51 @@ await page.addInitScript(() => {
 })
 await page.goto(`${BASE}/?root=opfs&opfs=${OPFS_DIR}`, { waitUntil: 'load' })
 
-const removed = await page.evaluate(async (names) => {
-  const root = await navigator.storage.getDirectory()
-  const gone = []
-  for (const name of names) {
-    try {
-      await root.removeEntry(name, { recursive: true })
-      gone.push(name)
-    } catch {
-      // 本来就没有
+const removed = await page.evaluate(
+  async (names) => {
+    const root = await navigator.storage.getDirectory()
+    const gone = []
+    for (const name of names) {
+      try {
+        await root.removeEntry(name, { recursive: true })
+        gone.push(name)
+      } catch {
+        // 本来就没有
+      }
     }
-  }
-  return gone
-}, ['.fstop-vfs', 'fstop-vectors', 'fstop-thumbs', OPFS_DIR])
+    return gone
+  },
+  ['.fstop-vfs', 'fstop-vectors', 'fstop-thumbs', OPFS_DIR],
+)
 console.log(`重置：清掉 ${removed.join(', ') || '（本来就没有）'}`)
 
-const seeded = await page.evaluate(async (args) => {
-  const manifest = await (await fetch('/bench/corpus/manifest.json')).json()
-  const names = manifest
-    .map((entry) => entry.file)
-    .filter(Boolean)
-    .slice(0, args.limit)
-  const root = await navigator.storage.getDirectory()
-  const directory = await root.getDirectoryHandle(args.dir, { create: true })
-  let bytes = 0
-  for (const name of names) {
-    const response = await fetch(`/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`)
-    if (!response.ok) throw new Error(`语料取回失败 HTTP ${response.status}：${name}`)
-    const blob = await response.blob()
-    const writable = await (await directory.getFileHandle(name, { create: true })).createWritable()
-    await writable.write(blob)
-    await writable.close()
-    bytes += blob.size
-  }
-  return { files: names.length, bytes }
-}, { limit: PHOTOS, dir: OPFS_DIR })
+const seeded = await page.evaluate(
+  async (args) => {
+    const manifest = await (await fetch('/bench/corpus/manifest.json')).json()
+    const names = manifest
+      .map((entry) => entry.file)
+      .filter(Boolean)
+      .slice(0, args.limit)
+    const root = await navigator.storage.getDirectory()
+    const directory = await root.getDirectoryHandle(args.dir, { create: true })
+    let bytes = 0
+    for (const name of names) {
+      const response = await fetch(
+        `/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`,
+      )
+      if (!response.ok) throw new Error(`语料取回失败 HTTP ${response.status}：${name}`)
+      const blob = await response.blob()
+      const writable = await (
+        await directory.getFileHandle(name, { create: true })
+      ).createWritable()
+      await writable.write(blob)
+      await writable.close()
+      bytes += blob.size
+    }
+    return { files: names.length, bytes }
+  },
+  { limit: PHOTOS, dir: OPFS_DIR },
+)
 console.log(`播种：${seeded.files} 张 / ${(seeded.bytes / 1048576).toFixed(1)} MB`)
 
 const readyStart = Date.now()
