@@ -107,11 +107,20 @@ describe('index-queue：领取与状态迁移', () => {
     expect(progressOf(db, 'embed')).toMatchObject({ done: 1, skipped: 1, finished: 2 })
   })
 
-  it('completeJob 对非运行态任务抛错（不许把 done 覆盖成 done）', () => {
+  it('completeJob 幂等：已 done 视为成功（writeBatch 已标 done 后再调是正常路径），failed/skipped 仍抛错', () => {
     const [a] = [insertPhoto('a.jpg')]
     enqueueJobs(db, [a], ['embed'], 1000)
     const claimed = claimBatch(db, { kind: 'embed', limit: 1, now: 1100 })
     completeJob(db, claimed[0]!.id, 1200)
+    // 幂等收尾：重复 complete 不抛（产品路径 writeBatch 已把任务标 done）
+    expect(() => completeJob(db, claimed[0]!.id, 1300)).not.toThrow()
+  })
+
+  it('completeJob 对非运行态且非 done 的任务抛错（failed/skipped 不许被洗成 done）', () => {
+    const [a] = [insertPhoto('a.jpg')]
+    enqueueJobs(db, [a], ['embed'], 1000)
+    const claimed = claimBatch(db, { kind: 'embed', limit: 1, now: 1100 })
+    skipJob(db, claimed[0]!.id, 'HEIC 不支持', 1200)
     expect(() => completeJob(db, claimed[0]!.id, 1300)).toThrow(/不在可完成状态/)
   })
 })
