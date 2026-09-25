@@ -31,6 +31,7 @@ import { browserLockKeeper, PRIMARY_LOCK } from '../storage/tab-primary-browser'
 import { electLeader, waitToPromote } from '../storage/tab-primary'
 import type { EmbedService } from '../workers/embed.worker'
 import CapabilityPanel from '../ui/CapabilityPanel.vue'
+import SimilarGroups from '../ui/SimilarGroups.vue'
 import PhotoWall from '../ui/PhotoWall.vue'
 
 const params = new URLSearchParams(location.search)
@@ -269,6 +270,13 @@ async function runSearch(): Promise<void> {
 }
 
 /**
+ * 相似分组的数据源：照片墙行同样有 photoId/thumbKey，直接复用那一次 `searchRows()`；
+ * 向量快照在分组按钮点击时才取（`SimilarGroups` 通过传出的 `takeSnapshot` 拿）。
+ */
+const similarThumbKeys = ref<Map<number, string | null>>(new Map())
+const similarSnapshot = ref<{ photoIds: number[]; vectors: Float32Array[] } | null>(null)
+
+/**
  * 打开照片墙：一次性取回全部已索引照片的轻量行（id/路径/缩略图键），
  * 图片本体由 PhotoWall 按可视窗口惰性读取 + LRU 回收。
  */
@@ -282,12 +290,38 @@ async function openWall(): Promise<void> {
       relPath: row.relPath,
       thumbKey: row.thumbKey,
     }))
+    similarThumbKeys.value = new Map(
+      rows.map((row) => [row.photoId, row.thumbKey satisfies string | null]),
+    )
+    similarSnapshot.value = await buildSimilarSnapshot(rows)
     wallOpen.value = true
     wallNote.value =
       rows.length === 0 ? '索引还是空的——先建立索引' : `共 ${rows.length} 张（仅渲染可视区域）`
   } catch (error) {
     wallNote.value = `读取照片列表失败：${error instanceof Error ? error.message : String(error)}`
   }
+}
+
+/** 取回全部已落盘的视觉向量，与行序一一对齐（检索层同款读法，无第二份实现） */
+async function buildSimilarSnapshot(
+  rows: readonly { photoId: number; matrixOffset: number }[],
+): Promise<{ photoIds: number[]; vectors: Float32Array[] } | null> {
+  if (vectors === null || rows.length === 0) return null
+  const matrix = await vectors.snapshot()
+  // 维度可由模型信息直接推出；这里从矩阵与最大槽位反推，避免再传一个参数
+  const maxOffset = rows.reduce((max, row) => Math.max(max, row.matrixOffset), 0)
+  if (maxOffset < 0 || matrix.length === 0) return null
+  const dimGuess = Math.round(matrix.length / (maxOffset + 1))
+  if (dimGuess <= 0 || !Number.isInteger(dimGuess)) return null
+  const photoIds: number[] = []
+  const outVectors: Float32Array[] = []
+  for (const row of rows) {
+    const base = row.matrixOffset * dimGuess
+    if (base + dimGuess > matrix.length) continue // 该向量尚未落盘
+    photoIds.push(row.photoId)
+    outVectors.push(matrix.slice(base, base + dimGuess))
+  }
+  return photoIds.length === 0 ? null : { photoIds, vectors: outVectors }
 }
 
 /** 照片墙的缩略图读取器（交给 PhotoWall 的缓存去管生命周期） */
@@ -387,6 +421,13 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
       </div>
       <p v-if="wallNote !== null" class="status">{{ wallNote }}</p>
       <PhotoWall v-if="wallOpen" :photos="wallPhotos" :load-thumb="loadWallThumb" />
+      <SimilarGroups
+        v-if="isLeader"
+        ref="similarRef"
+        :thumb-keys="similarThumbKeys"
+        :snapshot="similarSnapshot"
+        :thumb-dir="thumbsDir"
+      />
       <ul class="results">
         <li v-for="hit in hits" :key="hit.photoId" class="result">
           <img
