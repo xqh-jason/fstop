@@ -86,9 +86,35 @@ async function main() {
     const external = new Set()
     context.on('request', (request) => {
       const url = new URL(request.url())
+      // 只统计真正会出网的协议：blob:/data: 的 host 是空串，会被误判成「外部 origin」
+      // （照片墙与结果网格都用 blob: 显示缩略图，实测踩到过一次假红）
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return
       if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') return
       external.add(url.host)
     })
+
+    // ——— 0. 确定性重置：先在**同源静态资源**上清 OPFS，再进应用 ———
+    // 为什么不能进应用后再清：boot() 已经打开了 sqlite VFS 与向量文件，
+    // 删除目录 = 句柄指向被 unlink 的文件（写入静默丢失，最难查的那种）。
+    // 历史踩坑：上一版留下的孤儿 `.crswap` 交换文件会让新会话读到 0 字节的向量文件。
+    await page.goto(`${base}/vite.svg`, { waitUntil: 'load' })
+    const removed = await page.evaluate(
+      async (names) => {
+        const root = await navigator.storage.getDirectory()
+        const gone = []
+        for (const name of names) {
+          try {
+            await root.removeEntry(name, { recursive: true })
+            gone.push(name)
+          } catch {
+            // 本来就没有
+          }
+        }
+        return gone
+      },
+      ['.fstop-vfs', 'fstop-vectors', 'fstop-thumbs', OPFS_DIR],
+    )
+    console.log(`重置：清掉 ${removed.join(', ') || '（本来就没有）'}`)
 
     await page.goto(`${base}/?root=opfs&opfs=${OPFS_DIR}`, { waitUntil: 'load' })
 
@@ -169,13 +195,36 @@ async function main() {
     for (const query of QUERIES) {
       await page.fill('input[type="search"]', query)
       await page.click('button[type="submit"]')
-      await page.waitForFunction(
-        () =>
-          document.querySelectorAll('.result__path').length > 0 ||
-          /索引还是空的/.test(document.body.innerText),
-        undefined,
-        { timeout: 120_000 },
-      )
+      try {
+        await page.waitForFunction(
+          () =>
+            document.querySelectorAll('.result__path').length > 0 ||
+            /索引还是空的/.test(document.body.innerText),
+          undefined,
+          { timeout: 120_000 },
+        )
+      } catch (error) {
+        const state = await page.evaluate(() => ({
+          ready: document.body.dataset.ready,
+          text: document.body.innerText.slice(0, 800),
+        }))
+        console.error(`检索「${query}」没出结果，页面状态：`, JSON.stringify(state, null, 2))
+        throw error
+      }
+      // 结果先出现、缩略图后补齐（首次命中要解码生成，属预期行为）→ 轮询等缩略图，不固定 sleep
+      try {
+        await page.waitForFunction(
+          () =>
+            document.querySelectorAll('img.result__thumb').length === 0 ||
+            [...document.querySelectorAll('img.result__thumb')].every(
+              (img) => (img.src ?? '') !== '',
+            ),
+          undefined,
+          { timeout: 60_000 },
+        )
+      } catch {
+        // 超时不算失败：下面的断言会如实报出「0 张缩略图」并让进程非零退出
+      }
       const outcome = await page.evaluate(() => ({
         paths: [...document.querySelectorAll('.result__path')].map(
           (node) => node.textContent ?? '',

@@ -61,7 +61,9 @@ en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/*
 | `src/core/scan-apply.ts` | ✅ M1 手写区 | 把扫描计划落成 SQL：插入/移动/恢复/重算/标记删除 + 任务重排；**整段一个事务**、**移动两步法**（防链式改名撞唯一约束）、内容变了只把任务打回 pending 不删向量槽位；12 条单测 |
 | `src/storage/photo-source-fsa.ts` | ✅ M1 | `FileSystemAccessSource`：只持句柄不复制文件；递归遍历（带深度上限、单层失败只跳过该层）、`stat()` 顺带算内容哈希 |
 | `src/storage/folder-access.ts` | ✅ M1 | 文件夹授权与权限持久化：句柄存 IndexedDB、启动查 `queryPermission`、`prompt` 时由用户手势触发 `requestPermission`；用窄接口 + 能力检测（不同 TS 版本的 `lib.dom` 时有时无） |
-| `src/storage/vector-matrix.ts` | ✅ M1 | M0 只追加；M1 补：`open()` 按文件现有大小**接着写**（否则重开一次就覆盖已有向量，且不报错）、`writeAt()` 就地覆盖（重算写回同一槽位）、`snapshot()` 读出矩阵供检索 |
+| `src/storage/vector-matrix.ts` | ✅ M1 | M0 只追加；M1 补：`open()` 按文件现有大小**接着写**（否则重开一次就覆盖已有向量，且不报错）、`writeAt()` 就地覆盖（重算写回同一槽位）、`snapshot()` 读出矩阵供检索、**`flush()` 按批提交**（不提交的写入只在 `.crswap` 里，检索读不到；见 §9.12）；10 条单测 |
+| `tests/unit/vector-matrix.test.ts` | ✅ M1 | 用复刻 **crswap 语义**的假句柄钉住写入可见性：未 flush 不可见 / flush 后可见 / 重开不覆盖 / 尾部半截忽略 / 关闭后禁写（10 条） |
+| `bench/matrix-probe.mjs` | ✅ 诊断 | 列出 OPFS 里向量文件的真实大小 + 跑一发检索看 `ranked`——§9.12 那个 bug 就是它抓的（保留，日后查「结果不对」先用它） |
 | `src/app/index-runner.ts` | ✅ M1 | 编排：扫描 → 判断 → 落库 → 领批 → 逐条处理。读不到=重试、解不开=跳过，两类分开；缩略图用内容哈希命名 |
 | `src/app/search.ts` | ✅ M1 | 文本塔编码 → 矩阵余弦 → top-K；每次查询重读矩阵，换来「索引期间可检索」 |
 | `src/app/App.vue` | ✅ M1 | 产品外壳：选文件夹 / 建索引 / 进度 / 检索 + 照片墙入口与从页只读态。`?root=opfs` 走合成根，供端到端自动化 |
@@ -240,6 +242,8 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 | Playwright 拒绝给 `webkitdirectory` 传文件数组 | 库的显式校验 | 同上；`files` 模式仍在，但基准不用它 |
 | 驱动器提前返回中间态 | 就绪条件写成「结果存在」 | 已修：按模式等**终态字段**（`photosPerSecond` / `textEmbedMs`） |
 | OPFS 文件名不能含 `/` | `getFileHandle` 直接抛 | 向量矩阵用 `space` 标识而非模型 id |
+| **索引跑完但检索零命中**，界面写「库内 40 张、已落盘 0 张」 | 写句柄全程不 `close()`：OPFS 的写入在提交前只落在 `.crswap` 交换文件里，`handle.getFile()` 读到的还是**旧长度（新文件 0 字节）**。检索看不到新向量；且未提交的写入在刷新/关页时可能整体丢失（索引白跑） | 已修（实测记录 §9.12）：写入**按批提交**（`VectorMatrix.flush()` 关句柄 = 落盘，下次写入懒开 `keepExistingData`），`index-runner` 每批调一次；`snapshot()` 自己先 flush。10 条单测用**复刻 crswap 语义**的假句柄钉住 |
+| 端到端偶发「0 张缩略图」/「外部 origin = 空」 | 两个脚本侧假红：① 缩略图是命中后懒生成的，固定等待会抓空；② `blob:` 请求的 `hostname` 是空串，被零外发断言当成外部 origin | 已修：缩略图改成轮询等待；零外发只统计 `http(s)`。**假红会掩盖真红，见到就修** |
 | `RawImage.read` 不接受 `ImageBitmap` | 库只收 Blob/canvas/RawImage | Worker 内加一层 `drawImage` + `getImageData` |
 | `JSON.stringify(可调用对象)` 返回 `undefined` | transformers.js 的 processor 是可调用对象 | 日志/序列化处要兜底 |
 | Wikimedia 缩略图只服务**特定宽度档**（1280/1920/3840；2000/2560 被 400） | 上游策略 | 语料脚本用已验证档位 + 原图兜底 |
@@ -320,7 +324,7 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 | 索引状态机 / 任务队列（`src/core/`） | ✅ `core/index-queue.ts`（无游标、崩溃恢复、重试上限） |
 | 索引期间可检索 | ✅ `search.ts` 每次查询重读矩阵，`partial` 如实标注 |
 | 缩略图墙（万张虚拟滚动） | ✅ `src/ui/PhotoWall.vue` + `app/wall-layout.ts`（纯窗口计算）+ `app/thumbnail-cache.ts`（LRU 300 + 显式 `revokeObjectURL`）。实测 200 张只渲染 **21** 个格子、滚到底 17 个（`bench/e2e-wall.mjs`） |
-| **产品路径索引吞吐** | ✅ **已收口**：根因不是事务，而是**索引任务死循环**——`writeBatch` 先标 `done`，随后的 `completeJob` 匹配不到 `running/pending` 抛错，catch 把任务 `failJob` 回 `pending`（attempts 卡 1↔2，永不到上限），同一批任务无限重做。修法：`completeJob` 对已 `done` 幂等成功（`failed/skipped` 仍抛错）。端到端 12 张 **900 s 超时 → 1.5 s**；200 张约 11 s（`bench/index-probe.mjs`） |
+| **产品路径索引吞吐** | ✅ **已收口**：死循环（见下）+ 向量未落盘（见下）修完后，产品路径 200 张 **12.8 s = 15.6 张/秒**（1 万张外推 10.7 分钟；基准页 17.69 张/秒 / 9.4 分钟，余差 12% 已定位：产品路径每张多一次单条入库与缩略图写）。达成手段：**批内并发 3 + 只把 GPU 嵌入串起来**（`src/core/concurrency.ts`）。⚠ 反例记牢：直接把 `embedImage` 并发提交会让标签页**空转卡死**。修复前同参数 900 s 超时未完 |
 | 多标签选主（Web Locks） | ✅ `storage/tab-primary.ts`（可注入的选主逻辑）+ `tab-primary-browser.ts`。从页只读并明确说明，主页释放后自动接管（`bench/e2e-tabs.mjs` 三断言）。坑：`request()` 的 `signal` 与 `ifAvailable` 不能同时传 |
 | 运行时零外发断言 | ✅ 基准页 + 产品页（`bench/e2e-app.mjs`）；静态断言在 `.github/workflows/ci.yml` |
 

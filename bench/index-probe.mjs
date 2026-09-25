@@ -248,8 +248,10 @@ async function main() {
   context.on('requestfinished', (request) => requests.push(request.url()))
   const external = new Set()
   context.on('request', (request) => {
-    const host = new URL(request.url()).hostname
-    if (host !== '127.0.0.1' && host !== 'localhost') external.add(host)
+    const url = new URL(request.url())
+    // blob:/data: 的 hostname 是空串，会被误判成「外部 origin」；只统计 http(s)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+    if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') external.add(url.hostname)
   })
 
   await page.goto(`${BASE}/?root=opfs&opfs=${OPFS_DIR}`, { waitUntil: 'load' })
@@ -372,30 +374,34 @@ async function main() {
     console.log(`重置：清掉 ${removed.join(', ') || '（本来就没有）'}`)
   }
 
-  const seeded = await page.evaluate(async (limit) => {
-    const manifest = await (await fetch('/bench/corpus/manifest.json')).json()
-    const names = manifest
-      .map((entry) => entry.file)
-      .filter(Boolean)
-      .slice(0, limit)
-    const root = await navigator.storage.getDirectory()
-    const directory = await root.getDirectoryHandle('probe-corpus', { create: true })
-    let bytes = 0
-    for (const name of names) {
-      const response = await fetch(
-        `/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`,
-      )
-      if (!response.ok) throw new Error(`语料取回失败 HTTP ${response.status}：${name}`)
-      const blob = await response.blob()
-      const writable = await (
-        await directory.getFileHandle(name, { create: true })
-      ).createWritable()
-      await writable.write(blob)
-      await writable.close()
-      bytes += blob.size
-    }
-    return { files: names.length, bytes }
-  }, PHOTOS)
+  const seeded = await page.evaluate(
+    async ({ limit, dir }) => {
+      const manifest = await (await fetch('/bench/corpus/manifest.json')).json()
+      const names = manifest
+        .map((entry) => entry.file)
+        .filter(Boolean)
+        .slice(0, limit)
+      const root = await navigator.storage.getDirectory()
+      // 播种目录必须与 URL 的 `opfs=` 一致：不一致时应用扫到空目录，表现为「索引完成 0 张」
+      const directory = await root.getDirectoryHandle(dir, { create: true })
+      let bytes = 0
+      for (const name of names) {
+        const response = await fetch(
+          `/bench/corpus/${name.split('/').map(encodeURIComponent).join('/')}`,
+        )
+        if (!response.ok) throw new Error(`语料取回失败 HTTP ${response.status}：${name}`)
+        const blob = await response.blob()
+        const writable = await (
+          await directory.getFileHandle(name, { create: true })
+        ).createWritable()
+        await writable.write(blob)
+        await writable.close()
+        bytes += blob.size
+      }
+      return { files: names.length, bytes }
+    },
+    { limit: PHOTOS, dir: OPFS_DIR },
+  )
   console.log(`播种：${seeded.files} 张 / ${(seeded.bytes / 1048576).toFixed(1)} MB`)
 
   const readyStart = Date.now()

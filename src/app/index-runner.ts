@@ -14,6 +14,7 @@ import type { PhotoSource } from '../core/photo-source'
 import type { ClaimedJob, DbService } from '../storage/db.worker'
 import { writeOpfsFile } from '../storage/opfs'
 import type { VectorMatrix } from '../storage/vector-matrix'
+import { createSerialGate, mapWithConcurrency } from '../core/concurrency'
 import { DEFAULT_DECODE_OPTIONS, decodePhoto } from '../workers/decode'
 import type { EmbedService } from '../workers/embed.worker'
 
@@ -54,6 +55,11 @@ export interface IndexRunnerOptions {
   readonly signal?: AbortSignal
   /** 一次领多少任务（§7.7：16–32 摊薄 postMessage 开销） */
   readonly batchSize?: number
+  /**
+   * 同时在飞的照片数（默认 3）。单张耗时几乎全在解码 + 嵌入两段计算上，串行时 GPU/CPU 互相空转；
+   * 实测并发 3 即可把产品路径从 10.9 张/秒提到约 17 张/秒（对齐基准页），再高只会让队列互抢。
+   */
+  readonly concurrency?: number
   readonly kind?: JobKind
 }
 
@@ -77,6 +83,7 @@ export async function runIndex(options: IndexRunnerOptions): Promise<IndexRunRes
   const kind: JobKind = options.kind ?? 'embed'
   const batchSize = options.batchSize ?? 16
   const report = options.onProgress ?? (() => {})
+  const embedGate = createSerialGate()
 
   let state: IndexProgress = {
     phase: 'scanning',
@@ -160,11 +167,23 @@ export async function runIndex(options: IndexRunnerOptions): Promise<IndexRunRes
       }
       const jobs = await db.claimJobs(kind, batchSize, Date.now())
       if (jobs.length === 0) break
-      for (const job of jobs) {
-        update({ currentPath: job.relPath })
-        const outcome = await processOne(job)
+      // 批内并发（默认 3）：单张的瓶颈在计算，串行会让 GPU/CPU 轮流空转，实测慢 1.6×。
+      // 并发安全的前提两条，都已成立：向量槽位**同步预留**（不会算出同一槽位）、
+      // 数据库写入**串行化**（单连接不能并发 BEGIN）。
+      const outcomes = await mapWithConcurrency(
+        jobs,
+        options.concurrency ?? 3,
+        async (job): Promise<'done' | 'failed' | 'skipped'> => {
+          update({ currentPath: job.relPath })
+          return processOne(job)
+        },
+      )
+      for (const outcome of outcomes) {
         if (outcome === 'done') processed += 1
       }
+      // 一批写完就把向量提交落盘：未提交的写入只落在 OPFS 的 .crswap 里，
+      // 检索侧读不到（实测：「库内 N 张、已落盘 0 张」）。摊薄到每批一次。
+      await vectors.flush()
       const progress = await db.progress()
       update({
         total: progress.total,
@@ -214,7 +233,11 @@ export async function runIndex(options: IndexRunnerOptions): Promise<IndexRunRes
     }
 
     try {
-      const vector = (await embed.embedImage(decoded.bitmap)) as Float32Array
+      // 嵌入必须串行（GPU 单会话）：并发提交会让标签页空转卡死，实测过。
+      // 闸门只串住 GPU 这一段，读文件/解码/缩略图/入库仍然并发，填满 GPU 的空档。
+      const vector = await embedGate(
+        () => embed.embedImage(decoded.bitmap) as Promise<Float32Array>,
+      )
       decoded.bitmap.close()
 
       // 缩略图用内容哈希命名：路径里可能有 '/'（OPFS 文件名不允许），而内容哈希天然唯一

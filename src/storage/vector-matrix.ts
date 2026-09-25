@@ -8,20 +8,30 @@
  * 每个 `space`（向量空间）一个文件：原版 CLIP 与 Chinese-CLIP 的图像侧不在同一空间，
  * 共用索引会把检索结果污染成噪声。
  *
- * M1 在 M0 的「只追加」之上补了三件事（都是产品路径必需的）：
+ * M1 在 M0 的「只追加」之上补了四件事（都是产品路径必需的）：
  * - **重开时接着写**：`open()` 按文件现有大小推出下一个槽位。M0 每次运行都是新文件，
  *   从 0 开始追加；产品里重开一次就把已有向量覆盖了（最坏的那种 bug：不报错、只是结果变差）。
  * - **就地覆盖** `writeAt(offset, …)`：照片内容变了要重算，但槽位是固定的
  *   （`UNIQUE (model_id, matrix_offset)`），所以重算必须写回同一槽位，而不是再追加一条。
  * - **读出快照** `snapshot()`：检索侧要遍历整个矩阵算余弦。
+ * - **攒批提交** `flush()`：**这是产品路径上最容易漏的一条**（实测踩过）——
+ *   `FileSystemWritableFileStream` 在 `close()` 之前，写入只落在 OPFS 的 `.crswap` 交换文件里，
+ *   `handle.getFile()` 读到的仍是**旧长度（甚至是 0 字节）**。于是：
+ *     1. 检索侧 `snapshot()` 看不到任何新向量 → 界面显示「库内 40 张、已落盘 0 张」、零命中；
+ *     2. 页面被刷新/关闭时这些未提交的写入可能整体丢失。
+ *   修法：不要全程只持一个写句柄。写入按批提交（`flush()` 关掉当前句柄 = 落盘），
+ *   下一次写入时再懒开一个（`keepExistingData: true`）。槽位预留仍在内存里同步完成
+ *   （见 `append()` 的注释），所以「先预留后写」的不变量不受影响。
  */
 
 export class VectorMatrix {
   private position = 0
+  private closed = false
+  /** 当前打开的写句柄；null = 已落盘、下次写入时再开 */
+  private writable: FileSystemWritableFileStream | null = null
 
   private constructor(
     private readonly handle: FileSystemFileHandle,
-    private readonly writable: FileSystemWritableFileStream,
     private readonly dimension: number,
   ) {}
 
@@ -39,10 +49,8 @@ export class VectorMatrix {
       throw new Error(`向量维度必须是正整数，实际为 ${String(dimension)}`)
     }
     const handle = await directory.getFileHandle(`${space}.f32`, { create: true })
-    // 保持句柄打开：每张照片都开关一次写句柄会把「入库」成本推高一个量级
-    const writable = await handle.createWritable({ keepExistingData: true })
-    const matrix = new VectorMatrix(handle, writable, dimension)
-    // 接着已有数据往后写；尾部不足一个槽位的半截数据忽略（上次写到一半崩了）
+    const matrix = new VectorMatrix(handle, dimension)
+    // 接着**已提交**的数据往后写；尾部不足一个槽位的半截数据忽略（上次写到一半崩了）
     const existing = await handle.getFile()
     const stride = dimension * Float32Array.BYTES_PER_ELEMENT
     matrix.position = Math.floor(existing.size / stride) * stride
@@ -74,8 +82,21 @@ export class VectorMatrix {
     await this.write(position, vector)
   }
 
+  /**
+   * 把已写入的数据提交到文件（关掉写句柄），下次写入时自动重开。
+   * 调用时机：每处理完一批任务、以及每次检索读取矩阵之前。
+   */
+  async flush(): Promise<void> {
+    const writable = this.writable
+    if (writable === null) return
+    this.writable = null
+    await writable.close()
+  }
+
   /** 读出整个矩阵（检索侧用；1 万 × 512 × 4 B ≈ 20 MB，放内存里遍历是毫秒级） */
   async snapshot(): Promise<Float32Array> {
+    // 先提交未落盘的写入，否则读到的长度是旧的（见文件头「攒批提交」）
+    await this.flush()
     const file = await this.handle.getFile()
     const stride = this.dimension * Float32Array.BYTES_PER_ELEMENT
     const slots = Math.floor(file.size / stride)
@@ -86,8 +107,16 @@ export class VectorMatrix {
     return this.position / (this.dimension * Float32Array.BYTES_PER_ELEMENT)
   }
 
+  /** 已经提交到文件的槽位数（诊断/测试用；与 `slots` 的差 = 尚未 flush 的写入） */
+  async committedSlots(): Promise<number> {
+    await this.flush()
+    const stride = this.dimension * Float32Array.BYTES_PER_ELEMENT
+    return Math.floor((await this.handle.getFile()).size / stride)
+  }
+
   async close(): Promise<void> {
-    await this.writable.close()
+    await this.flush()
+    this.closed = true
   }
 
   private assertDimension(vector: Float32Array): void {
@@ -97,6 +126,9 @@ export class VectorMatrix {
   }
 
   private async write(position: number, vector: Float32Array): Promise<void> {
+    if (this.closed) throw new Error('向量矩阵已关闭，不能再写入')
+    // 懒开写句柄：一批写入共用一个句柄（每张照片开关一次会把入库成本推高一个量级）
+    this.writable ??= await this.handle.createWritable({ keepExistingData: true })
     await this.writable.write({
       type: 'write',
       position,
