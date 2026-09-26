@@ -211,14 +211,16 @@ async function main() {
         console.error(`检索「${query}」没出结果，页面状态：`, JSON.stringify(state, null, 2))
         throw error
       }
-      // 结果先出现、缩略图后补齐（首次命中要解码生成，属预期行为）→ 轮询等缩略图，不固定 sleep
+      // 结果先出现、缩略图后补齐（首次命中要解码生成，属预期行为）→ 轮询等缩略图。
+      // 注意：缩略图未就绪时模板里的 `v-if` 根本不渲染 <img>，所以判据必须是
+      // 「有命中 → 至少一张缩略图」，否则「0 个 img」会被当成就绪（踩过，假红）。
       try {
         await page.waitForFunction(
-          () =>
-            document.querySelectorAll('img.result__thumb').length === 0 ||
-            [...document.querySelectorAll('img.result__thumb')].every(
-              (img) => (img.src ?? '') !== '',
-            ),
+          () => {
+            const hits = document.querySelectorAll('.result__path').length
+            if (hits === 0) return true
+            return document.querySelectorAll('img.result__thumb').length > 0
+          },
           undefined,
           { timeout: 60_000 },
         )
