@@ -6,9 +6,20 @@
 
 工程骨架、`src/core/` 契约、M0 五项实测**已完成并提交**；M0 收口补测（质量 / files 根因 / 拆塔 spike /
 成本口径 / 导出塔 / 有头复测）**全部完成**（2026-09-24）；**M1（MVP）核心已收口**（2026-09-25）——
-「1 万张进 10 分钟」「产品路径索引吞吐」「缩略图墙万张虚拟滚动」「多标签选主」四项全部落地并实测，
-`pnpm verify` 11 个测试文件 / 115 项全绿。剩下的 M1 边角只有索引侧预处理（**已决定不做**）
-与人工精编 query（**卡在取材**），理由见 §9B 末段。
+「1 万张进 10 分钟」「产品路径索引吞吐」「缩略图墙万张虚拟滚动」「多标签选主」四项全部落地并实测。
+剩下的 M1 边角只有索引侧预处理（**已决定不做**）与人工精编 query（**卡在取材**），理由见 §9B 末段。
+
+**M2 四项全部收口**（2026-09-26）：① 相似/重复图分组；② 检索结果按时间/相似度重排；
+③ 人脸聚类与人物命名（检测 SCRFD-34g → 5 点对齐 → antelopev2/r100 识别 → 质心聚类 →
+面板上命名/合并/拆分）；④ 离线能力可视化面板（用户可亲眼核对「只向模型 origin 发请求」）。
+`pnpm verify` 19 个测试文件 / 212 项全绿；五条端到端（app / wall / tabs / similar / **faces**）全绿。
+
+**M2 的两个关键教训**（都是实测暴露的，细节见实测记录 §9.17/§9.18）：
+- **预处理参数口径**：`rgbaToChw` 先把像素除以 255 再套 mean/std，所以 `(v-127.5)/127.5`
+  要写成 mean/std = 0.5。写成 127.5 会让输入塌成常数，模型输出全是噪声级分数（一张脸都检不出）。
+  定位靠**变体扫描**（`bench/face-probe.mjs`，`PROBE_MODE=sweep`），不是靠猜。
+- **「GPU 单会话」要每条新推理路径重新执行一次**：人脸 runner 起初并发提交 `analyze`，
+  产品页卡在第一批不动——与 M1 嵌入路径同一个坑，用同一把 `createSerialGate` 解决。
 
 **产品路径吞吐的收口没有靠调优，而是靠定位一个死循环**：`writeBatch` 落库时先把任务标成 `done`，
 随后的 `completeJob` 因严格守卫（只接受 `running/pending`）匹配不到行而抛错，外层 catch 又把任务
@@ -86,6 +97,32 @@ en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/*
 | `src/workers/embed.worker.ts` | ✅ | 单实例推理 Worker；**三条加载路径**：`derived`（重导出单塔，M1）/ 原生单文件双塔 / 原生分塔；回落原因不静默 |
 | `src/workers/embed-derived.ts` | ✅ M1 | 派生单塔加载器：自建 ORT 会话（wasm 钉同源）、文本塔懒加载、动态 `import()` |
 | `src/workers/embed-preprocess.ts` | ✅ M1 | `ImageBitmap` → NCHW 预处理；**产品 Worker 与基准页共用同一份** |
+| `src/core/egress-ledger.ts` | ✅ M2 | 外发账本纯函数：按 host 分 `local` / `model` / `external`（`blob:`/`data:` 不计入）。11 条单测，与 CI 静态断言、端到端运行时断言构成三层互证 |
+| `src/ui/OfflinePanel.vue` | ✅ M2 | 离线能力面板：`PerformanceObserver('resource')` 记**真实发出的请求**并按 host 分类、`storage.estimate()` 占用、本机照片/缩略图/向量体积；出现 external 红着点名 |
+| `src/core/face-detect.ts` | ✅ M2 | SCRFD 后处理纯函数：anchor 中心、letterbox、解码（bbox = **anchor 中心到框边距离**）、NMS、逆变换 |
+| `src/core/face-align.ts` | ✅ M2 | 5 点相似变换到 112²（最小二乘解）；`landmarksUsable` 退化检测 |
+| `src/core/face-cluster.ts` | ✅ M2 | 人脸聚类：**全链约束**的贪心 + 迭代精化（只看质心会被「中点效应」雪球式误并）；合并/拆分。22 条单测 |
+| `src/workers/face-preprocess.ts` | ✅ M2 | 人脸预处理共享模块：检测 letterbox / 识别 5 点裁切 / `FACE_DECODE_SIDE=1280`（**不要沿用照片嵌入的 512**） |
+| `src/workers/ort-runtime.ts` | ✅ M2 | 共享 ORT 装载（照片塔与人脸链同一份） |
+| `src/workers/face.worker.ts` | ✅ M2 | 人脸单 Worker 链：检测 → 对齐 → 识别（避免跨线程拷贝 4000×3000 位图） |
+| `src/app/face-runner.ts` | ✅ M2 | 人脸流水线（1:N，独立于 `index-runner.ts`）；推理走 `createSerialGate` 串行（同一 ORT 会话不接受并发 run） |
+| `src/ui/PeoplePanel.vue` | ✅ M2 | 人物面板：命名/合并/拆分；封面按框定位裁切缩略图，不额外写小图；组节点带 `data-members` 供端到端断言 |
+| `scripts/fetch-faces-corpus.mjs` | ✅ M2 | 带标签人脸语料抓取：**人工点名单人肖像** + 许可硬卡 PD/CC0（分类抓取会混进合影与文字图，见 §9.18 夹具教训） |
+| `bench/e2e-faces.mjs` | ✅ M2 | 人脸端到端（14 条断言）：检测数 → 带标签聚类纯度（无混合组）→ 命名 → 合并 → 拆分 → 名字活过重算 → 零外发 |
+| `bench/faces.html` / `bench/faces.ts` / `bench/face-probe.mjs` | ✅ M2 | 人脸链探针：`PROBE_MODE=sweep` 扫预处理变体、`chain` 逐段计时、`pairwise` 打印**带标签的两两余弦矩阵**并用产品聚类函数复算 |
+| `src/core/egress-ledger.ts` | ✅ M2 | 外发账本纯函数：按 host 分 `local` / `model` / `external`（`blob:`/`data:` 不计入）。11 条单测，与 CI 静态断言、端到端运行时断言构成三层互证 |
+| `src/ui/OfflinePanel.vue` | ✅ M2 | 离线能力面板：`PerformanceObserver('resource')` 记**真实发出的请求**并按 host 分类、`storage.estimate()` 占用、本机照片/缩略图/向量体积；出现 external 红着点名 |
+| `src/core/face-detect.ts` | ✅ M2 | SCRFD 后处理纯函数：anchor 中心、letterbox、解码（bbox = **anchor 中心到框边距离**）、NMS、逆变换 |
+| `src/core/face-align.ts` | ✅ M2 | 5 点相似变换到 112²（最小二乘解）；`landmarksUsable` 退化检测 |
+| `src/core/face-cluster.ts` | ✅ M2 | 人脸聚类：**全链约束**的贪心 + 迭代精化（只看质心会被「中点效应」雪球式误并）；含合并/拆分。22 条单测 |
+| `src/workers/face-preprocess.ts` | ✅ M2 | 人脸预处理共享模块：检测 letterbox / 识别 5 点裁切 / `FACE_DECODE_SIDE=1280`（**不要沿用照片嵌入的 512**） |
+| `src/workers/ort-runtime.ts` | ✅ M2 | 共享 ORT 装载（照片塔与人脸链同一份） |
+| `src/workers/face.worker.ts` | ✅ M2 | 人脸单 Worker 链：检测 → 对齐 → 识别（避免跨线程拷贝 4000×3000 位图） |
+| `src/app/face-runner.ts` | ✅ M2 | 人脸流水线（1:N，独立于 `index-runner.ts`）；推理走 `createSerialGate` 串行（同一 ORT 会话不接受并发 run） |
+| `src/ui/PeoplePanel.vue` | ✅ M2 | 人物面板：命名/合并/拆分；封面按框定位裁切缩略图，不额外写小图；组节点带 `data-members` 供端到端断言 |
+| `scripts/fetch-faces-corpus.mjs` | ✅ M2 | 带标签人脸语料抓取：**人工点名单人肖像** + 许可硬卡 PD/CC0（按分类抓会混进合影与文字图，见实测记录 §9.18 夹具教训） |
+| `bench/e2e-faces.mjs` | ✅ M2 | 人脸端到端（14 条断言）：检测数 → 带标签聚类纯度（无混合组）→ 命名 → 合并 → 拆分 → 名字活过重算 → 零外发 |
+| `bench/faces.html` / `bench/faces.ts` / `bench/face-probe.mjs` | ✅ M2 | 人脸链探针：`PROBE_MODE=sweep` 扫预处理变体、`chain` 逐段计时、`pairwise` 打印**带标签的两两余弦矩阵**并用产品聚类函数复算 |
 | `src/shared/env.ts` | ✅ | 能力探测（FSA / OPFS / WebGPU / persist） |
 | `src/app`、`src/ui` | ✅ 壳 | 应用装配 + 能力面板；**检索 UI 未做** |
 | `bench/` | ✅ M0 级 | 探针、基准页、检索延迟页、**检索质量页（§9A2 已完成）**、Playwright 驱动器、合成语料、HTTP 语料源 |
@@ -333,6 +370,18 @@ python3 bench/export-towers.py --sizes 224 160 112 64         # 只要产物、�
 缩略图墙 + 虚拟滚动（**显式 `ImageBitmap.close()` + 约 300 张活跃的 LRU**）；
 索引期间可检索；索引进度与断点续算；`src/core/` 的**索引状态机与任务队列**；
 Web Locks 选主（第二标签页退化为只读）；CI 的**运行时**零外发断言。
+
+### D. M2 范围（按计划 §九）—— **四项全部收口**
+
+| M2 项 | 状态 |
+|---|---|
+| 相似 / 重复图分组 | ✅ `src/core/similarity-group.ts`（余弦阈值 + 并查集）。实测 16 张（8 等距原片 + 各 1 复制品）→ 8 组、每组 2 张、**零误吸**、1 ms（实测记录 §9.14） |
+| 检索结果按时间 / 相似度重排 | ✅ `src/core/result-order.ts`：相似度 / 时间新→旧 / 旧→新；时间优先 EXIF `taken_at`、缺了退回 `mtime`、都缺排最后并标注「时间未知」（不塞假时间）；切排序是客户端重排、不重查库。14 条单测 + `bench/e2e-app.mjs` 5 条排序断言（实测记录 §9.16） |
+| 人脸聚类与人物命名 | ✅ SCRFD-34g 检测 → 5 点对齐 112² → antelopev2/r100 512 维 → **全链约束**贪心+精化聚类 → 命名/合并/拆分。实测 7 张单人肖像 → 7 张脸 → **正好 2 组（4 奥巴马 + 3 拜登）、零混合组**；同人余弦 0.506–0.995、异人 ≤0.031。`bench/e2e-faces.mjs` **14 条断言全绿**（实测记录 §9.18） |
+| 离线能力可视化面板 | ✅ `src/core/egress-ledger.ts`（11 条单测）+ `src/ui/OfflinePanel.vue`：记**真实发出的请求**并按 host 分类、显示本机占用与索引规模、external 红着点名。`bench/e2e-app.mjs` 6 条断言，其中一条**与脚本的请求钩子互证**（脚本 0 个 / 面板 0 行）（实测记录 §9.17） |
+
+⚠ 人脸功能有 **license 约束**：识别模型 `antelopev2`（insenseface 系）是**非商用**条款，
+一旦启用，本项目不得转商用 —— 已写入 `NOTICE.md` §2 与 `README.md`「许可与使用限制」。
 
 ## 10. 不要做的事
 

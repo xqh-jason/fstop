@@ -36,15 +36,20 @@ app 启动时探测该目录的 `manifest.json`，探测不到就回落到原生
 任何非 `127.0.0.1/localhost` 的请求都会点名并使该轮基准**以非零码退出**。
 静态扫描（`scripts/check-egress.mjs`）看不到依赖内部的请求，这条断言补的就是这个缺口。
 
-## 2. 人脸模型（M2 / P1，尚未接入）
+## 2. 人脸模型（M2 / P1，**已接入**）
 
-| 资产 | 来源 | 许可 | 本仓库是否分发 |
-|---|---|---|---|
-| `immich-app/scrfd_34g_gnkps`（人脸检测） | Hugging Face | MIT | 否，仅脚本 |
-| `immich-app/antelopev2`（人脸识别，insightface 系） | Hugging Face | **`license: other`（非商用研究用途）** | 否，仅脚本 |
+| 资产 | 来源 | 许可 | 本仓库是否分发 | 实测体积 |
+|---|---|---|---|---|
+| `immich-app/scrfd_34g_gnkps`（人脸检测） | Hugging Face | MIT | 否，运行时按模型 origin 拉取 | 39,424,525 B |
+| `immich-app/antelopev2`（人脸识别，insightface 系） | Hugging Face | **`license: other`（非商用研究用途）** | 否，运行时按模型 origin 拉取 | 260,665,334 B |
 
-> **`antelopev2` 的非商用条款会约束整个产品**：一旦接入，本项目不得转商用。
-> 该限制必须在 README 与界面中同步告知。
+> **`antelopev2` 的非商用条款约束整个产品**：一旦接入，本项目不得转商用。
+> 该限制必须在 README 与界面中同步告知 —— 见 README 的「许可与使用限制」一节。
+>
+> 两个权重**都不进仓库、不做本地派生产物**：它们的输入尺寸与我们的用法一致
+> （检测 640²、识别对齐后 112²），不需要图手术，因此直接按模型 origin 拉取即可。
+> 冷缓存首次运行会下载约 300 MB，之后走浏览器缓存；`src/storage/models.ts` 是唯一声明处，
+> 外发白名单与运行时零外发断言都覆盖这两个 URL。
 
 ## 3. 运行时依赖
 

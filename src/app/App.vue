@@ -39,6 +39,13 @@ import {
   type ResultOrder,
 } from '../core/result-order'
 import SimilarGroups from '../ui/SimilarGroups.vue'
+import OfflinePanel from '../ui/OfflinePanel.vue'
+import PeoplePanel from '../ui/PeoplePanel.vue'
+import { FACE_RECOGNIZER } from '../storage/models'
+import { runFaces, type FaceRunProgress } from './face-runner'
+import { normalizeVector, splitCluster } from '../core/face-cluster'
+import type { FaceService } from '../workers/face.worker'
+import type { ClusterRow, FaceRow } from '../storage/db.worker'
 import PhotoWall from '../ui/PhotoWall.vue'
 
 const params = new URLSearchParams(location.search)
@@ -49,6 +56,54 @@ const OPFS_SEGMENTS = (params.get('opfs') ?? 'bench-corpus')
 const TOP_K = Number(params.get('topk') ?? 24)
 
 const capabilities = ref<Capabilities | null>(null)
+
+// ——— 人脸状态（M2）———
+const faces = ref<readonly FaceRow[]>([])
+const clusters = ref<readonly ClusterRow[]>([])
+/** 是否跑过人脸识别：区分「没跑」与「跑完一张脸都没有」 */
+const faceRan = ref(false)
+const facing = ref(false)
+const faceStatus = ref<string | null>(null)
+/** 离线面板要的本机数据（照片/向量/缩略图/向量矩阵字节数）——按需复查，不在渲染里遍历目录 */
+const localStats = ref<{
+  photos: number
+  embeddings: number
+  thumbFiles: number
+  thumbBytes: number
+  vectorBytes: number
+} | null>(null)
+
+/**
+ * 统计本机数据占用。缩略图目录要逐个 `getFile()` 拿大小（OPFS 没有目录级体积查询），
+ * 1 万张量级是几百毫秒到几秒，所以只在用户点「复查」或索引结束后调用一次，
+ * 绝不放渲染路径里。
+ */
+async function refreshLocalStats(): Promise<void> {
+  if (db === null) return
+  try {
+    const counts = await db.stats()
+    let thumbFiles = 0
+    let thumbBytes = 0
+    if (thumbsDir !== null) {
+      for await (const [, handle] of thumbsDir.entries()) {
+        if (handle.kind !== 'file') continue
+        thumbFiles += 1
+        thumbBytes += (await handle.getFile()).size
+      }
+    }
+    const slots = vectors === null ? 0 : await vectors.committedSlots()
+    const dim = vectors === null ? 0 : vectors.dim
+    localStats.value = {
+      photos: counts.photos,
+      embeddings: counts.embeddings,
+      thumbFiles,
+      thumbBytes,
+      vectorBytes: slots * dim * Float32Array.BYTES_PER_ELEMENT,
+    }
+  } catch {
+    localStats.value = null
+  }
+}
 const supported = ref(supportsDirectoryPicker())
 const rootLabel = ref<string | null>(null)
 const permission = ref<'granted' | 'prompt' | 'denied' | 'none'>('none')
@@ -88,7 +143,10 @@ const wallNote = ref<string | null>(null)
 
 let db: DbService | null = null
 let embed: EmbedService | null = null
+let face: FaceService | null = null
 let vectors: VectorMatrix | null = null
+/** 人脸向量单独一个矩阵（space=face-arcface-r100）：与照片向量混存会让检索槽位语义崩掉 */
+let faceVectors: VectorMatrix | null = null
 let thumbsDir: FileSystemDirectoryHandle | null = null
 let source: FileSystemAccessSource | null = null
 let modelId = ''
@@ -158,6 +216,154 @@ async function elect(): Promise<void> {
   }
 }
 
+/**
+ * 人脸流水线（M2）：跑识别 → 读回分组 → 刷新界面。
+ */
+async function runFacePipeline(): Promise<void> {
+  if (db === null || face === null || vectors === null || faceVectors === null || source === null) {
+    notice.value = '初始化还没完成，稍后再试'
+    return
+  }
+  facing.value = true
+  faceStatus.value = '正在加载人脸模型（首次约 300 MB）…'
+  try {
+    const rootId = ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY
+    const controller = new AbortController()
+    await runFaces({
+      rootId,
+      source,
+      db,
+      face,
+      vectors: faceVectors,
+      modelId: FACE_RECOGNIZER.modelId,
+      signal: controller.signal,
+      onProgress: (progress: FaceRunProgress) => {
+        faceStatus.value =
+          progress.phase === 'loading'
+            ? '正在加载人脸模型（首次约 300 MB，之后走浏览器缓存）…'
+            : progress.phase === 'clustering'
+              ? `正在聚类…已检出 ${String(progress.faces)} 张人脸`
+              : `识别人脸 ${String(progress.done)}/${String(progress.total)}` +
+                (progress.failed > 0 ? `（失败 ${String(progress.failed)}）` : '')
+      },
+    })
+    await refreshFaceData()
+    faceStatus.value = null
+  } catch (error) {
+    notice.value = `人脸识别中断：${error instanceof Error ? error.message : String(error)}`
+    faceStatus.value = null
+  } finally {
+    facing.value = false
+  }
+}
+
+async function refreshFaceData(): Promise<void> {
+  if (db === null) return
+  faces.value = await db.listFaces()
+  clusters.value = await db.listClusters()
+  // 「跑过没跑过」看任务表：跑完但一张脸都没检出时，faces 是空的，但那不等于「没跑过」
+  const progress = await db.faceProgress()
+  faceRan.value = faces.value.length > 0 || progress.total > 0
+  void refreshLocalStats()
+  await refreshFaceThumbs()
+}
+
+async function renameCluster(clusterId: number, name: string): Promise<void> {
+  if (db === null) return
+  await db.renameCluster(clusterId, name === '' ? null : name)
+  await refreshFaceData()
+}
+
+/**
+ * 合并两组：把来源组的成员搬到目标组，然后删掉来源组。
+ * 保留目标组是刻意的——用户说「这两个是同一个人」时，期望留下的是他刚才写过名字的那一组。
+ */
+async function mergeClusters(fromClusterId: number, toClusterId: number): Promise<void> {
+  if (db === null || faceVectors === null) return
+  const from = clusters.value.find((cluster) => cluster.clusterId === fromClusterId)
+  if (from === undefined) return
+  await db.setFaceClusters(from.faceIds.map((faceId) => ({ faceId, clusterId: toClusterId })))
+  await db.deleteCluster(fromClusterId)
+  await refreshFaceData()
+}
+
+/** 拆分：把选中的脸交给 core 的 `splitCluster` 重新分组（不假设用户想分几组） */
+async function splitSelected(clusterId: number, selectedIds: readonly number[]): Promise<void> {
+  if (db === null || faceVectors === null) return
+  const cluster = clusters.value.find((item) => item.clusterId === clusterId)
+  if (cluster === undefined) return
+  if (selectedIds.length === 0) return
+
+  // 一次快照 + 按行切片：向量按 `matrixOffset * dim` 定位（与检索层同一套口径）
+  const vectorsById = await faceVectorsOf(cluster.faceIds)
+  const allVectors = await faceVectorsOf(faces.value.map((face) => face.faceId))
+  const centroid = centroidFrom(
+    cluster.faceIds.map((faceId) => allVectors.get(faceId)).filter(isVector),
+  )
+
+  const { remaining, moved } = splitCluster(
+    { faceIds: cluster.faceIds, centroid },
+    selectedIds,
+    vectorsById,
+  )
+  if (remaining !== null) {
+    await db.setFaceClusters(remaining.faceIds.map((faceId) => ({ faceId, clusterId })))
+  }
+  for (const group of moved) {
+    const newId = await db.createCluster(null)
+    await db.setFaceClusters(group.faceIds.map((faceId) => ({ faceId, clusterId: newId })))
+    const cover = group.faceIds[0]
+    if (cover !== undefined) await db.setClusterCover(newId, cover)
+  }
+  await refreshFaceData()
+}
+
+/** 取这批人脸在人脸矩阵里的向量（一次快照，按行切片） */
+async function faceVectorsOf(faceIds: readonly number[]): Promise<Map<number, Float32Array>> {
+  const result = new Map<number, Float32Array>()
+  if (faceVectors === null) return result
+  const matrix = await faceVectors.snapshot()
+  const dim = faceVectors.dim
+  if (dim === 0) return result
+  const slots = Math.floor(matrix.length / dim)
+  for (const faceId of faceIds) {
+    const face = faces.value.find((item) => item.faceId === faceId)
+    if (face === undefined || face.matrixOffset >= slots) continue
+    result.set(faceId, matrix.slice(face.matrixOffset * dim, (face.matrixOffset + 1) * dim))
+  }
+  return result
+}
+
+function isVector(value: Float32Array | undefined): value is Float32Array {
+  return value !== undefined
+}
+
+function centroidFrom(rows: readonly Float32Array[]): Float32Array {
+  const dim = faceVectors?.dim ?? 512
+  const sum = new Float32Array(dim)
+  for (const row of rows) {
+    for (let index = 0; index < dim; index += 1) sum[index] = (sum[index] ?? 0) + (row[index] ?? 0)
+  }
+  return normalizeVector(sum)
+}
+
+/** 人物面板里的脸裁切要用缩略图；补上人脸引用到但还没读出来的那些 */
+async function refreshFaceThumbs(): Promise<void> {
+  if (thumbsDir === null) return
+  const next = { ...thumbs.value }
+  let changed = false
+  for (const face of faces.value) {
+    const key = face.thumbKey
+    if (key === null || next[key] !== undefined) continue
+    const blob = await readOpfsFile(thumbsDir, key)
+    if (blob !== null) {
+      next[key] = URL.createObjectURL(blob)
+      changed = true
+    }
+  }
+  if (changed) thumbs.value = next
+}
+
 async function boot(): Promise<void> {
   try {
     const dbWorker = new Worker(new URL('../storage/db.worker.ts', import.meta.url), {
@@ -168,6 +374,10 @@ async function boot(): Promise<void> {
       type: 'module',
     })
     embed = Comlink.wrap<EmbedService>(embedWorker)
+    const faceWorker = new Worker(new URL('../workers/face.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    face = Comlink.wrap<FaceService>(faceWorker)
 
     const rootId = ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY
     await db.open(rootId)
@@ -195,8 +405,17 @@ async function boot(): Promise<void> {
       modelId.replace(/\//g, '_'),
       dim,
     )
+    // 人脸向量矩阵按「固定空间名」开：换照片模型时人脸向量不该被牵连重算
+    faceVectors = await VectorMatrix.open(
+      await opfsDirectory('fstop-vectors'),
+      'face-arcface-r100',
+      FACE_RECOGNIZER.dim,
+    )
     thumbsDir = await opfsDirectory('fstop-thumbs')
     await refreshThumbMap()
+    // 人脸数据从库里读回：打开页面就能看到上次的聚类结果（不必重跑识别）
+    await refreshFaceData()
+    await refreshFaceThumbs()
     ready.value = true
   } catch (error) {
     notice.value = `初始化失败：${error instanceof Error ? error.message : String(error)}`
@@ -261,6 +480,9 @@ async function startIndex(): Promise<void> {
       },
     })
     await refreshThumbMap()
+    // 索引刚写完一批缩略图与向量，顺手把离线面板的数字刷新到最新（这里不做轮询：
+    // 目录级体积统计在 1 万张量级要几百毫秒，只在索引结束这种明确节点跑一次）
+    await refreshLocalStats()
   } catch (error) {
     notice.value = `索引中断：${error instanceof Error ? error.message : String(error)}`
   } finally {
@@ -383,6 +605,19 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
     </header>
 
     <CapabilityPanel :capabilities="capabilities" />
+    <OfflinePanel :local="localStats" :on-refresh="refreshLocalStats" />
+    <PeoplePanel
+      :faces="faces"
+      :clusters="clusters"
+      :thumb-urls="thumbs"
+      :ran="faceRan"
+      :status="faceStatus"
+      :busy="facing"
+      :on-rename="renameCluster"
+      :on-merge="mergeClusters"
+      :on-split="splitSelected"
+      :on-run="runFacePipeline"
+    />
 
     <section class="card">
       <h2 class="card__title">照片文件夹</h2>

@@ -35,6 +35,11 @@ export class VectorMatrix {
     private readonly dimension: number,
   ) {}
 
+  /** 向量维度（检索/离线面板都要用它把字节数换算成条数，不该各自复制一份） */
+  get dim(): number {
+    return this.dimension
+  }
+
   static async open(
     directory: FileSystemDirectoryHandle,
     space: string,

@@ -14,50 +14,8 @@
 
 import type { DerivedTowerPlan } from '../storage/models'
 import { toPixelValues } from './embed-preprocess'
-
-/** 只声明用到的表面，避免把 ORT 的类型拖进产品代码的公开契约 */
-interface OrtTensor {
-  readonly data: Float32Array
-  readonly dims: readonly number[]
-}
-interface OrtSession {
-  run(
-    feeds: Record<string, unknown>,
-    fetches?: readonly string[],
-  ): Promise<Record<string, OrtTensor>>
-  release?: () => Promise<void>
-}
-interface OrtModule {
-  InferenceSession: { create(path: string, options?: Record<string, unknown>): Promise<OrtSession> }
-  Tensor: new (type: string, data: Float32Array, dims: readonly number[]) => unknown
-  env: { wasm: Record<string, unknown>; logLevel?: string }
-}
-
-let ortModule: Promise<OrtModule> | null = null
-
-/**
- * 动态加载 ORT 并把 wasm 运行时钉到同源资源上。
- *
- * 两个踩过的坑，都写在这里免得再犯：
- * 1. `onnxruntime-web/webgpu` 导出的是 **`.bundle.` 构建**（内嵌 emscripten glue），
- *    它配的 wasm 是 **asyncify** 版；给 jsep 版、或者额外给 `mjs`（会让它去加载独立的
- *    glue 模块），都会在 `InferenceSession.create` 时报
- *    `no available backend found. ERR: [webgpu] TypeError: …webgpuInit is not a function`。
- *    正确做法与 transformers.js 一致：asyncify wasm + **不给 mjs**。
- * 2. 不给 `wasmPaths` 的话 ORT 会回落到 CDN（见 `src/storage/models.ts` 文件头注释）。
- */
-async function loadOrt(): Promise<OrtModule> {
-  ortModule ??= (async () => {
-    const [ort, wasm] = await Promise.all([
-      import('onnxruntime-web/webgpu') as unknown as Promise<OrtModule>,
-      import('onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'),
-    ])
-    ort.env.wasm['wasmPaths'] = { wasm: wasm.default }
-    ort.env.wasm['proxy'] = false
-    return ort
-  })()
-  return ortModule
-}
+// ORT 装载与类型声明都在共享模块里：人脸 Worker 也走同一条路径（红线：同一语义不写两份）
+import { loadOrt, type OrtSession } from './ort-runtime'
 
 export interface DerivedRuntime {
   readonly resolution: number

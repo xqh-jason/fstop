@@ -22,6 +22,9 @@ bench/results/
 bench/fixtures/
 # 真实照片语料本体（GB 级，不入库；可提交的清单是 bench/corpus-manifest.json）
 bench/corpus/
+# 人脸语料本体同理：照片不入库，可提交的只有清单（来源 / 许可 / sha256，见 scripts/fetch-faces-corpus.mjs）
+bench/corpus-faces/*
+!bench/corpus-faces/manifest.json
 # 拆塔/降分辨率 spike 的派生产物（图手术导出，与 .cache 同一纪律：仓库不分发权重）
 bench/export/
 # 派生产物（图手术切出的单塔）是权重：只在本地生成、只在本机服务，永不入库（NOTICE §1）

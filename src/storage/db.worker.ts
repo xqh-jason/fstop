@@ -17,6 +17,7 @@ import {
   type QueueStatement,
   claimBatch,
   completeJob,
+  enqueueJobs,
   failJob,
   progressOf,
   requeueRunning,
@@ -78,6 +79,29 @@ export interface DbService {
   requeueRunning(now: number): Promise<number>
   /** 检索要用的行：活着且已有向量的照片 */
   searchRows(): Promise<readonly SearchRow[]>
+
+  // ——— M2：人脸（一张照片 0..N 张脸，向量与照片向量分开存）———
+
+  /** 登记人脸任务：给「还没有 face 任务」的活照片插 pending（重复调用不会重复插） */
+  enqueueFaceJobs(now: number): Promise<number>
+  /** 人脸任务的进度（与照片嵌入的进度分开数） */
+  faceProgress(): Promise<ReturnType<typeof progressOf>>
+  /** 写入一张照片的人脸：先删旧记录（重算语义），再插新行；返回新的 faceId（按入参顺序） */
+  writeFaces(rows: readonly FaceWrite[]): Promise<readonly number[]>
+  /** 全部人脸（含所属照片与分组），供界面与聚类用 */
+  listFaces(): Promise<readonly FaceRow[]>
+  /** 全部人脸分组 */
+  listClusters(): Promise<readonly ClusterRow[]>
+  /** 批量改人脸所属分组（聚类结果落库 / 拆分） */
+  setFaceClusters(updates: readonly { faceId: number; clusterId: number | null }[]): Promise<void>
+  /** 新建分组（返回新 id） */
+  createCluster(name: string | null): Promise<number>
+  renameCluster(clusterId: number, name: string | null): Promise<void>
+  deleteCluster(clusterId: number): Promise<void>
+  /** 设置分组封面（必须是该组成员；传 null 清空） */
+  setClusterCover(clusterId: number, faceId: number | null): Promise<void>
+  /** 人脸总数（0 = 还没跑过人脸识别，界面据此区分「没跑」与「跑完没人脸」） */
+  countFaces(): Promise<number>
 }
 
 export interface SearchRow {
@@ -104,6 +128,40 @@ export interface ClaimedJob {
   readonly attempts: number
   /** 已有向量槽位；null = 这张照片还没算过（重算时必须写回同一槽位） */
   readonly matrixOffset: number | null
+}
+
+/** 一条要领出来的人脸记录（重算时先按 photo 删旧行，所以不需要 offset 回写语义） */
+export interface FaceWrite {
+  readonly relPath: string
+  readonly modelId: string
+  readonly dim: number
+  readonly x1: number
+  readonly y1: number
+  readonly x2: number
+  readonly y2: number
+  readonly matrixOffset: number
+}
+
+export interface FaceRow {
+  readonly faceId: number
+  readonly photoId: number
+  readonly relPath: string
+  readonly thumbKey: string | null
+  readonly x1: number
+  readonly y1: number
+  readonly x2: number
+  readonly y2: number
+  readonly clusterId: number | null
+  readonly matrixOffset: number
+  readonly width: number | null
+  readonly height: number | null
+}
+
+export interface ClusterRow {
+  readonly clusterId: number
+  readonly name: string | null
+  readonly coverFaceId: number | null
+  readonly faceIds: readonly number[]
 }
 
 interface StatementRunner {
@@ -276,6 +334,153 @@ async function createService(options: DbOpenOptions = {}): Promise<DbService> {
         )
         .all() as readonly SearchRow[]
     },
+
+    // ——— M2：人脸 ———
+
+    async enqueueFaceJobs(now) {
+      // 只给「活照片」登记；`INSERT OR IGNORE` 让重复点击不会重置已完成的任务。
+      // 想重算的人脸用「重跑」按钮走 requeueRunning / 显式重置，不靠重复登记。
+      const photoIds = queue
+        .prepare(`SELECT id AS photoId FROM photos WHERE deleted_at IS NULL`)
+        .all() as readonly { photoId: number }[]
+      return enqueueJobs(
+        queue,
+        photoIds.map((row) => row.photoId),
+        ['face'],
+        now,
+      )
+    },
+
+    async faceProgress() {
+      return progressOf(queue, 'face')
+    },
+
+    async writeFaces(rows) {
+      if (rows.length === 0) return []
+      const faceIds: number[] = []
+      // 同一张照片**先删一次、再整批插入**。
+      // 反面教训（实测踩过）：把 DELETE 放进逐行循环里，同一张照片的第 2 张脸会把刚插进去的
+      // 第 1 张脸删掉 —— 一张 3 张脸的照片库里只剩 1 张，而且不报错（静默丢数据）。
+      const byPhoto = new Map<string, typeof rows>()
+      for (const row of rows) {
+        const list = byPhoto.get(row.relPath) ?? []
+        byPhoto.set(row.relPath, [...list, row])
+      }
+      db.exec('BEGIN')
+      try {
+        for (const [relPath, group] of byPhoto) {
+          const photoId = Number(
+            db.selectValue('SELECT id FROM photos WHERE rel_path = ? AND deleted_at IS NULL', [
+              relPath,
+            ]),
+          )
+          if (!Number.isFinite(photoId)) throw new Error(`人脸写入失败：照片不在库里 ${relPath}`)
+          if (group.length === 0) continue
+          db.exec({
+            sql: `DELETE FROM faces WHERE photo_id = ? AND model_id = ?`,
+            bind: [photoId, group[0]!.modelId],
+          })
+          for (const row of group) {
+            db.exec({
+              sql: `INSERT INTO faces (photo_id, model_id, x1, y1, x2, y2, cluster_id, matrix_offset)
+                    VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+              bind: [photoId, row.modelId, row.x1, row.y1, row.x2, row.y2, row.matrixOffset],
+            })
+            faceIds.push(Number(db.selectValue('SELECT last_insert_rowid()')))
+          }
+        }
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+      return faceIds
+    },
+
+    async listFaces() {
+      return queue
+        .prepare(
+          `SELECT f.id AS faceId, f.photo_id AS photoId, p.rel_path AS relPath,
+                  p.thumb_key AS thumbKey, p.width AS width, p.height AS height,
+                  f.x1 AS x1, f.y1 AS y1, f.x2 AS x2, f.y2 AS y2,
+                  f.cluster_id AS clusterId, f.matrix_offset AS matrixOffset
+           FROM faces f JOIN photos p ON p.id = f.photo_id
+           WHERE p.deleted_at IS NULL
+           ORDER BY f.id`,
+        )
+        .all() as readonly FaceRow[]
+    },
+
+    async listClusters() {
+      const clusterRows = queue
+        .prepare(
+          `SELECT id AS clusterId, name AS name, cover_face_id AS coverFaceId FROM clusters ORDER BY id`,
+        )
+        .all() as readonly { clusterId: number; name: string | null; coverFaceId: number | null }[]
+      const memberRows = queue
+        .prepare(
+          `SELECT cluster_id AS clusterId, id AS faceId FROM faces WHERE cluster_id IS NOT NULL ORDER BY id`,
+        )
+        .all() as readonly { clusterId: number; faceId: number }[]
+      const members = new Map<number, number[]>()
+      for (const row of memberRows) {
+        const list = members.get(row.clusterId)
+        if (list === undefined) members.set(row.clusterId, [row.faceId])
+        else list.push(row.faceId)
+      }
+      return clusterRows.map((row) => ({
+        clusterId: row.clusterId,
+        name: row.name,
+        coverFaceId: row.coverFaceId,
+        faceIds: members.get(row.clusterId) ?? [],
+      }))
+    },
+
+    async setFaceClusters(updates) {
+      if (updates.length === 0) return
+      db.exec('BEGIN')
+      try {
+        for (const update of updates) {
+          db.exec({
+            sql: `UPDATE faces SET cluster_id = ? WHERE id = ?`,
+            bind: [update.clusterId, update.faceId],
+          })
+        }
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    },
+
+    async createCluster(name) {
+      db.exec({ sql: `INSERT INTO clusters (name, cover_face_id) VALUES (?, NULL)`, bind: [name] })
+      return Number(db.selectValue('SELECT last_insert_rowid()'))
+    },
+
+    async renameCluster(clusterId, name) {
+      db.exec({ sql: `UPDATE clusters SET name = ? WHERE id = ?`, bind: [name, clusterId] })
+    },
+
+    async deleteCluster(clusterId) {
+      // faces.cluster_id 是 ON DELETE SET NULL：删组不删脸（脸的照片还该在「未分组」里找得到）
+      db.exec({ sql: `DELETE FROM clusters WHERE id = ?`, bind: [clusterId] })
+    },
+
+    async setClusterCover(clusterId, faceId) {
+      if (faceId !== null) {
+        const owner = Number(db.selectValue('SELECT cluster_id FROM faces WHERE id = ?', [faceId]))
+        if (owner !== clusterId) throw new Error('封面必须来自本组（否则界面会显示别人的脸）')
+      }
+      db.exec({
+        sql: `UPDATE clusters SET cover_face_id = ? WHERE id = ?`,
+        bind: [faceId, clusterId],
+      })
+    },
+
+    async countFaces() {
+      return Number(db.selectValue('SELECT count(*) FROM faces'))
+    },
   }
 }
 
@@ -366,5 +571,42 @@ Comlink.expose({
   },
   async searchRows() {
     return (service ??= createService({})).then((instance) => instance.searchRows())
+  },
+  async enqueueFaceJobs(now: number) {
+    return (service ??= createService({})).then((instance) => instance.enqueueFaceJobs(now))
+  },
+  async faceProgress() {
+    return (service ??= createService({})).then((instance) => instance.faceProgress())
+  },
+  async writeFaces(rows: readonly FaceWrite[]) {
+    return (service ??= createService({})).then((instance) => instance.writeFaces(rows))
+  },
+  async listFaces() {
+    return (service ??= createService({})).then((instance) => instance.listFaces())
+  },
+  async listClusters() {
+    return (service ??= createService({})).then((instance) => instance.listClusters())
+  },
+  async setFaceClusters(updates: readonly { faceId: number; clusterId: number | null }[]) {
+    return (service ??= createService({})).then((instance) => instance.setFaceClusters(updates))
+  },
+  async createCluster(name: string | null) {
+    return (service ??= createService({})).then((instance) => instance.createCluster(name))
+  },
+  async renameCluster(clusterId: number, name: string | null) {
+    return (service ??= createService({})).then((instance) =>
+      instance.renameCluster(clusterId, name),
+    )
+  },
+  async deleteCluster(clusterId: number) {
+    return (service ??= createService({})).then((instance) => instance.deleteCluster(clusterId))
+  },
+  async setClusterCover(clusterId: number, faceId: number | null) {
+    return (service ??= createService({})).then((instance) =>
+      instance.setClusterCover(clusterId, faceId),
+    )
+  },
+  async countFaces() {
+    return (service ??= createService({})).then((instance) => instance.countFaces())
   },
 } satisfies DbService)

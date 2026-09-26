@@ -107,3 +107,12 @@ Node `>=22.22` (unit tests use `node:sqlite` to run the real schema), pnpm 11. S
 ## Licence
 
 Code: **MIT** (`LICENSE`). Model weights are **not** redistributed by this repository — origins, licences and the reasoning are recorded in `NOTICE`.
+
+### 许可与使用限制（重要）
+
+人脸功能（M2）使用的识别模型 `immich-app/antelopev2` 采用 **insightface 的 `license: other`（非商用研究用途）**。
+这一条会传导到整个产品：**只要启用人脸识别，本项目就不得用于商业用途**。
+检测模型 `immich-app/scrfd_34g_gnkps` 是 MIT，不构成限制。
+
+界面（「人物」面板）与 `NOTICE` §2 都写明了这一点；若你需要商用，
+可以只用检索与相似分组功能（不点「识别人脸」），或自行替换为许可允许的人脸模型。

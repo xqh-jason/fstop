@@ -1,0 +1,82 @@
+{
+  "generatedAt": "2026-09-26T03:47:32.440Z",
+  "files": [
+    {
+      "file": "obama-01.jpg",
+      "person": "obama",
+      "label": "奥巴马",
+      "license": "Public domain",
+      "source": "File:President Barack Obama.jpg",
+      "width": 1024,
+      "height": 1279,
+      "bytes": 351331,
+      "sha256": "9d78e7fec6c595e16466fdfe160cc1a869cca61df4759f9636912861e2aa2192"
+    },
+    {
+      "file": "obama-02.jpg",
+      "person": "obama",
+      "label": "奥巴马",
+      "license": "Public domain",
+      "source": "File:Barack Obama Senate portrait crop.jpg",
+      "width": 1024,
+      "height": 1296,
+      "bytes": 389118,
+      "sha256": "7ee90bceff070ee9af0b63ae2085ea565e202a94264f8344e8038ea7676a1629"
+    },
+    {
+      "file": "obama-03.jpg",
+      "person": "obama",
+      "label": "奥巴马",
+      "license": "Public domain",
+      "source": "File:President Barack Obama (1).jpg",
+      "width": 1024,
+      "height": 1367,
+      "bytes": 382414,
+      "sha256": "e4dfcceb455a9c7b9e0d745ef5842bb8e16d4811dc2c5cc6c4851cc3ab26e582"
+    },
+    {
+      "file": "obama-04.png",
+      "person": "obama",
+      "label": "奥巴马",
+      "license": "Public domain",
+      "source": "File:Barack Obama 2013 (4x5).png",
+      "width": 1024,
+      "height": 1280,
+      "bytes": 2293115,
+      "sha256": "f9fe337c140ff009cc9d60d42a0ad98340aa28e817b5a2045a5625794425a0e1"
+    },
+    {
+      "file": "biden-01.jpg",
+      "person": "biden",
+      "label": "拜登",
+      "license": "Public domain",
+      "source": "File:Joe Biden official portrait.jpg",
+      "width": 1024,
+      "height": 1277,
+      "bytes": 279913,
+      "sha256": "a63b0e1401bd647662be80a1a7480573cbfb9cb55c58a60b3948a3f29b894970"
+    },
+    {
+      "file": "biden-02.jpg",
+      "person": "biden",
+      "label": "拜登",
+      "license": "Public domain",
+      "source": "File:Joe Biden presidential portrait.jpg",
+      "width": 1024,
+      "height": 1280,
+      "bytes": 315714,
+      "sha256": "604f57d6387120b1230d189ee8d4f9fd2e6ad4abd9c5a26ac4763bd604ac2bba"
+    },
+    {
+      "file": "biden-03.jpg",
+      "person": "biden",
+      "label": "拜登",
+      "license": "Public domain",
+      "source": "File:Inaugural portrait of Joe Biden.jpg",
+      "width": 1024,
+      "height": 1524,
+      "bytes": 92285,
+      "sha256": "924d920fe57d75fb7e82951696efc51fe1afd3fceb5c81be58c926fcf23e6b3b"
+    }
+  ]
+}

@@ -305,6 +305,24 @@ async function main() {
       check('「新→旧」确实按时间不增排列', descending, sortState.times[0] ?? '')
     }
 
+    // ——— 4.6 离线能力面板（M2）：应用自己的账本必须和外部请求钩子一致 ———
+    const panelState = await page.evaluate(() => {
+      const panel = document.querySelector('[data-testid="offline-panel"]')
+      if (panel === null) return null
+      const verdict = document.querySelector('[data-testid="offline-verdict"]')
+      const rows = [...panel.querySelectorAll('tbody tr')].map((row) => ({
+        host: row.querySelector('.offline__host')?.textContent?.trim() ?? '',
+        kind: row.getAttribute('data-kind') ?? '',
+      }))
+      return {
+        verdict: verdict?.textContent?.trim().replace(/\s+/g, ' ') ?? '',
+        clean: verdict?.getAttribute('data-clean') ?? '',
+        hosts: rows,
+        violationRows: rows.filter((row) => row.kind === 'external').length,
+        text: panel.textContent?.replace(/\s+/g, ' ').slice(0, 300) ?? '',
+      }
+    })
+
     // ——— 5. 运行时零外发（产品页）———
     const offenders = [...external].filter(
       (host) => !MODEL_HOSTS.some((allowed) => host.endsWith(allowed)),
@@ -318,6 +336,29 @@ async function main() {
       console.log(`  模型 origin：${modelHits.join(', ')}（冷缓存时才会出现）`)
     }
     check('没有页面未捕获异常', pageErrors.length === 0, pageErrors[0] ?? '无')
+
+    // ——— 6. 离线能力面板（M2）：应用自己的账本必须与脚本的外部请求钩子一致 ———
+    check('离线能力面板已渲染', panelState !== null)
+    if (panelState !== null) {
+      check('面板判定「本会话零违规外发」', panelState.clean === 'true', panelState.verdict)
+      check(
+        '面板账本里没有 external 行',
+        panelState.violationRows === 0,
+        JSON.stringify(panelState.hosts.slice(0, 5)),
+      )
+      check(
+        '面板账本记录了本机请求',
+        panelState.hosts.some((host) => host.kind === 'local'),
+        panelState.hosts.map((host) => `${host.kind}:${host.host}`).join(', '),
+      )
+      // 两套独立记账必须互相印证：脚本抓到过外部 host，面板就不能说零违规
+      check(
+        '面板与脚本的外发判定一致',
+        offenders.length > 0 ? panelState.violationRows > 0 : panelState.violationRows === 0,
+        `脚本 ${String(offenders.length)} 个 / 面板 ${String(panelState.violationRows)} 行`,
+      )
+      check('面板显示本机占用', /向量/.test(panelState.text), panelState.text.slice(0, 120))
+    }
   } finally {
     await context?.close()
     server.kill('SIGTERM')

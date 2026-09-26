@@ -123,6 +123,63 @@ export function configureModelRuntime(options: ModelRuntimeOptions = {}): void {
   ortWasm.wasmPaths = { wasm: onnxWasmUrl }
 }
 
+// ── 人脸模型（M2） ────────────────────────────────────────────────────────────
+//
+// 规格由 `bench/face-model-probe.py` 从权重文件实测读出（不是照着别人文档抄的）：
+// - 检测 `immich-app/scrfd_34g_gnkps/detection/model.onnx`，MIT，39.4 MB
+//   输入 `input.1` [1,3,640,640]；输出三档 stride（8/16/32）各一组
+//   `score_{s}` [N,1] + `bbox_{s}` [N,4] + `kps_{s}` [N,10]，N = (640/s)² × 2 个 anchor
+// - 识别 `immich-app/antelopev2/recognition/model.onnx`（glintr100/r100 重导出），
+//   **非商用**（insightface 的 license，见 NOTICE §3），260.7 MB
+//   输入 `input.1` [None,3,112,112]；输出 [1,512]（未归一化，需 L2 归一化）
+//
+// 为什么不做成本地派生产物：这两个权重的输入尺寸与我们的用法一致（640 检测、112 对齐识别），
+// 不需要图手术；直接按 model origin 拉取即可，也就不存在「派生产物分发」的 license 问题。
+export interface FaceDetectorSpec {
+  readonly modelId: string
+  readonly url: string
+  readonly bytes: number
+  readonly license: string
+  /** 送进网络的方形边长 */
+  readonly inputSize: number
+  readonly strides: readonly number[]
+  readonly anchorsPerLocation: number
+  readonly scoreThreshold: number
+  readonly iouThreshold: number
+}
+
+export interface FaceRecognizerSpec {
+  readonly modelId: string
+  readonly url: string
+  readonly bytes: number
+  readonly license: string
+  readonly inputSize: number
+  readonly dim: number
+}
+
+export const FACE_MODEL_HOST = 'https://huggingface.co'
+
+export const FACE_DETECTOR: FaceDetectorSpec = {
+  modelId: 'immich-app/scrfd_34g_gnkps',
+  url: `${FACE_MODEL_HOST}/immich-app/scrfd_34g_gnkps/resolve/main/detection/model.onnx`,
+  bytes: 39424525,
+  license: 'MIT',
+  inputSize: 640,
+  strides: [8, 16, 32],
+  anchorsPerLocation: 2,
+  scoreThreshold: 0.5,
+  iouThreshold: 0.4,
+}
+
+export const FACE_RECOGNIZER: FaceRecognizerSpec = {
+  modelId: 'immich-app/antelopev2',
+  url: `${FACE_MODEL_HOST}/immich-app/antelopev2/resolve/main/recognition/model.onnx`,
+  bytes: 260665334,
+  license: '非商用（insightface antelopev2）—— 见 NOTICE §3',
+  inputSize: 112,
+  dim: 512,
+}
+
 // ── 派生产物（图手术导出的单塔） ───────────────────────────────────────────────
 //
 // 背景（实测记录 §9.5/§9.9）：`Xenova/chinese-clip-vit-base-patch16` 是**单文件双塔**，
