@@ -24,6 +24,9 @@ export interface SearchHit {
   readonly thumbKey: string | null
   readonly width: number | null
   readonly height: number | null
+  /** 时间信息（M2「按时间重排」用）：EXIF 拍摄时间优先，缺了退回文件修改时间 */
+  readonly takenAt: number | null
+  readonly mtime: number | null
 }
 
 export interface SearchOutcome {
@@ -84,6 +87,8 @@ export async function searchPhotos(options: SearchOptions): Promise<SearchOutcom
     thumbKey: row.thumbKey,
     width: row.width,
     height: row.height,
+    takenAt: row.takenAt,
+    mtime: row.mtime,
   }))
 
   return {

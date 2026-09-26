@@ -87,6 +87,10 @@ export interface SearchRow {
   readonly thumbKey: string | null
   readonly width: number | null
   readonly height: number | null
+  /** EXIF 拍摄时间（可能没有——不是所有照片都带 EXIF） */
+  readonly takenAt: number | null
+  /** 文件修改时间（总是有；「按时间」在缺 EXIF 时退回它） */
+  readonly mtime: number | null
 }
 
 /** 一条领出来的任务：任务本身 + 处理它需要的照片信息 */
@@ -264,7 +268,8 @@ async function createService(options: DbOpenOptions = {}): Promise<DbService> {
       return queue
         .prepare(
           `SELECT p.id AS photoId, p.rel_path AS relPath, e.matrix_offset AS matrixOffset,
-                  p.thumb_key AS thumbKey, p.width AS width, p.height AS height
+                  p.thumb_key AS thumbKey, p.width AS width, p.height AS height,
+                  p.taken_at AS takenAt, p.mtime AS mtime
            FROM photos p JOIN embeddings e ON e.photo_id = p.id
            WHERE p.deleted_at IS NULL
            ORDER BY e.matrix_offset`,

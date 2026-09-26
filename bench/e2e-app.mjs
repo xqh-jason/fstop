@@ -270,6 +270,41 @@ async function main() {
       Number(second.status.match(/索引完成：(\d+)/)?.[1] ?? -1) === CORPUS_LIMIT,
     )
 
+    // ——— 4.5 结果重排（M2）：切「按时间」后顺序真的变了，且首尾确是新/旧两端 ———
+    const sortState = await page.evaluate(async () => {
+      const select = document.querySelector('[data-testid="result-order"]')
+      if (select === null) return null
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+      const readPaths = () =>
+        [...document.querySelectorAll('.result__path')].map((node) => node.textContent ?? '')
+      const similarity = readPaths()
+      setter?.call(select, 'newest')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const newest = readPaths()
+      const times = [...document.querySelectorAll('.result__time')].map((n) => n.textContent ?? '')
+      setter?.call(select, 'oldest')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const oldest = readPaths()
+      return { similarity, newest, oldest, times }
+    })
+    check('排序控件存在', sortState !== null)
+    if (sortState !== null) {
+      const { similarity, newest, oldest } = sortState
+      check('切成「按时间」后顺序改变', JSON.stringify(newest) !== JSON.stringify(similarity))
+      check(
+        '新旧两个方向的顺序互为反向',
+        JSON.stringify([...newest].reverse()) === JSON.stringify(oldest),
+      )
+      check('时间列已渲染', sortState.times.length > 0, `${sortState.times.length} 行`)
+      const parsed = sortState.times
+        .map((text) => (text === '时间未知' ? null : Date.parse(text)))
+        .filter((value) => value !== null)
+      const descending = parsed.every((value, index) => index === 0 || parsed[index - 1] >= value)
+      check('「新→旧」确实按时间不增排列', descending, sortState.times[0] ?? '')
+    }
+
     // ——— 5. 运行时零外发（产品页）———
     const offenders = [...external].filter(
       (host) => !MODEL_HOSTS.some((allowed) => host.endsWith(allowed)),

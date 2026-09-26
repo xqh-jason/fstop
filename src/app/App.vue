@@ -31,6 +31,13 @@ import { browserLockKeeper, PRIMARY_LOCK } from '../storage/tab-primary-browser'
 import { electLeader, waitToPromote } from '../storage/tab-primary'
 import type { EmbedService } from '../workers/embed.worker'
 import CapabilityPanel from '../ui/CapabilityPanel.vue'
+import {
+  countUnknownTime,
+  effectiveTime,
+  orderResults,
+  RESULT_ORDER_LABELS,
+  type ResultOrder,
+} from '../core/result-order'
 import SimilarGroups from '../ui/SimilarGroups.vue'
 import PhotoWall from '../ui/PhotoWall.vue'
 
@@ -55,6 +62,22 @@ const notice = ref<string | null>(null)
 const query = ref('')
 const searching = ref(false)
 const hits = ref<readonly SearchHit[]>([])
+/**
+ * 结果排序（M2）：默认「按相似度」= 检索层的原始顺序，切到时间模式时**客户端重排**，
+ * 不重新查库（重排只是重排，再跑一次检索既慢又会刷新相似度分数）。
+ */
+const order = ref<ResultOrder>('similarity')
+const orderedHits = computed(() => orderResults(hits.value, order.value))
+const unknownTime = computed(() =>
+  order.value === 'similarity' ? 0 : countUnknownTime(hits.value),
+)
+
+/** 结果行上显示的时间：拍摄时间优先，缺了用文件时间；都没有就说不知道 */
+function formatTime(hit: SearchHit): string {
+  const time = effectiveTime(hit)
+  if (time === null) return '时间未知'
+  return new Date(time).toLocaleDateString('zh-CN')
+}
 const searchNote = ref<string | null>(null)
 const thumbs = ref<Record<string, string>>({})
 
@@ -428,8 +451,24 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
         :snapshot="similarSnapshot"
         :thumb-dir="thumbsDir"
       />
+      <div v-if="hits.length > 0" class="sortbar">
+        <label class="sortbar__label" for="result-order">排序</label>
+        <select
+          id="result-order"
+          v-model="order"
+          class="sortbar__select"
+          data-testid="result-order"
+        >
+          <option v-for="(label, value) in RESULT_ORDER_LABELS" :key="value" :value="value">
+            {{ label }}
+          </option>
+        </select>
+        <span v-if="unknownTime > 0" class="sortbar__note">
+          其中 {{ unknownTime }} 张没有时间信息（已排在最后）
+        </span>
+      </div>
       <ul class="results">
-        <li v-for="hit in hits" :key="hit.photoId" class="result">
+        <li v-for="hit in orderedHits" :key="hit.photoId" class="result">
           <img
             v-if="hit.thumbKey !== null && thumbs[hit.thumbKey] !== undefined"
             class="result__thumb"
@@ -441,6 +480,7 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
           <div class="result__meta">
             <span class="result__path">{{ hit.relPath }}</span>
             <span class="result__score">{{ hit.score.toFixed(3) }}</span>
+            <span v-if="order !== 'similarity'" class="result__time">{{ formatTime(hit) }}</span>
           </div>
         </li>
       </ul>
@@ -541,6 +581,27 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
   font-size: 0.875rem;
 }
 
+.sortbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.5rem;
+  font-size: 0.85rem;
+}
+.sortbar__select {
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+}
+.sortbar__note {
+  opacity: 0.7;
+}
+.result__time {
+  opacity: 0.7;
+  margin-left: 0.4rem;
+}
 .results {
   list-style: none;
   margin: 0;

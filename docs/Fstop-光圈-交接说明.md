@@ -65,7 +65,8 @@ en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/*
 | `tests/unit/vector-matrix.test.ts` | ✅ M1 | 用复刻 **crswap 语义**的假句柄钉住写入可见性：未 flush 不可见 / flush 后可见 / 重开不覆盖 / 尾部半截忽略 / 关闭后禁写（10 条） |
 | `bench/matrix-probe.mjs` | ✅ 诊断 | 列出 OPFS 里向量文件的真实大小 + 跑一发检索看 `ranked`——§9.12 那个 bug 就是它抓的（保留，日后查「结果不对」先用它） |
 | `src/app/index-runner.ts` | ✅ M1 | 编排：扫描 → 判断 → 落库 → 领批 → 逐条处理。读不到=重试、解不开=跳过，两类分开；缩略图用内容哈希命名 |
-| `src/app/search.ts` | ✅ M1 | 文本塔编码 → 矩阵余弦 → top-K；每次查询重读矩阵，换来「索引期间可检索」 |
+| `src/app/search.ts` | ✅ M1 | 文本塔编码 → 矩阵余弦 → top-K；每次查询重读矩阵，换来「索引期间可检索」。命中带 `takenAt`/`mtime`（时间重排用） |
+| `src/core/result-order.ts` | ✅ M2 | 检索结果排序纯函数：相似度 / 时间（新→旧、旧→新）。时间优先 EXIF `taken_at`、缺了退回 `mtime`、两者都缺排最后并在界面标注「时间未知」（不塞假时间）；同时间用相似度做 tiebreaker。14 条单测 |
 | `src/app/App.vue` | ✅ M1 | 产品外壳：选文件夹 / 建索引 / 进度 / 检索 + 照片墙入口与从页只读态。`?root=opfs` 走合成根，供端到端自动化 |
 | `src/app/wall-layout.ts` | ✅ M1 | 照片墙窗口计算（纯函数）：列数/行数/撑高 + 可视行与 overscan；**万张级只渲染可视行**，9 条单测 |
 | `src/app/thumbnail-cache.ts` | ✅ M1 | 缩略图 LRU（默认 300）+ **显式 `revokeObjectURL`**；同 key 并发只加载一次；7 条单测钉住淘汰顺序与 revoke |
