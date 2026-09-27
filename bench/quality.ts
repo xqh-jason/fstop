@@ -20,7 +20,7 @@
 import * as Comlink from 'comlink'
 import type { PhotoRef } from '../src/core/photo-source'
 import { DEFAULT_DTYPE, DEFAULT_MODEL_ID } from '../src/storage/models'
-import { HttpPhotoSource } from './http-photo-source'
+import { HttpPhotoSource } from '../src/storage/photo-source-http'
 import { DEFAULT_DECODE_OPTIONS, decodePhoto } from '../src/workers/decode'
 import type { EmbedService } from '../src/workers/embed.worker'
 import qualityQueries from './quality-queries.json'

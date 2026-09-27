@@ -18,6 +18,25 @@ Fstop is a search layer for a photo library you already have. It holds file hand
 
 **Performance is not this project's battlefield.** A CUDA box will always win. Fstop bets on three other things: **zero install, zero copies, auditable core.** So the hard limits below are not about speed.
 
+## Try it
+
+Nothing to install, and no folder to hand over first — the build ships a sample library.
+
+```bash
+pnpm install
+pnpm dev            # then open the printed localhost URL
+```
+
+Click **先试用内置样例** ("try the bundled samples") in the folder card: the app indexes 39 CC0/public-domain
+photos that live in `public/samples/`, so you can see indexing, search, similar-photo grouping, the people
+panel and the offline panel without granting access to your own library. Then pick your real folder.
+
+Deployment is a static site. `pnpm build` emits a self-contained `dist/` (ONNX Runtime's wasm and the
+SQLite wasm are bundled same-origin, model weights are fetched from the model origin at runtime and cached
+by the browser) — serve it from any static host. `pnpm build && node bench/e2e-samples.mjs` verifies the
+built artifact end to end: sample indexing, a search, and that no request leaves for a host other than the
+model origin — including the app's own origin, which must never show up as a violation.
+
 ## Hard limits
 
 | Property          | Target                                                                                                               |
@@ -81,7 +100,19 @@ Cache API and produces no network request at all). It is now pinned to a same-or
 asserts **zero external requests other than the model origin** at runtime, failing the run with a non-zero exit
 code otherwise. The static egress check cannot see inside dependencies; this is the second gate.
 
-Details: `docs/Fstop-光圈-M0-实测记录.md` §9 (the M1 landing is §9.10).
+**M2 (differentiating features) complete** — all four items landed and measured:
+
+| M2 item                      | What it does                                                                                                                                 | Measured                                                                                                                                  |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Similar / duplicate grouping | cosine threshold + union-find over the same vectors                                                                                          | 16 photos (8 originals + 1 copy each) → 8 groups of 2, **zero false merges**, 1 ms                                                        |
+| Result ordering              | similarity / newest / oldest; EXIF `taken_at` first, falling back to `mtime`, and honestly labelled "unknown time" rather than inventing one | 5 ordering assertions in `bench/e2e-app.mjs`                                                                                              |
+| Face clustering + naming     | SCRFD-34g detect → 5-point align → ArcFace 512-d → **complete-linkage** clustering; rename / merge / split in the UI                         | 7 labelled portraits → 7 faces → exactly 2 groups (4 + 3), **no mixed group**; same-person cosine 0.506–0.995 vs different-person ≤ 0.031 |
+| Offline-capability panel     | records the requests the browser _actually_ makes, groups them by host, shows local storage/size, names any offending host in red            | 6 assertions in `bench/e2e-app.mjs`, one of them cross-checked against the test script's own request hook                                 |
+
+Note the face models' licence: the recogniser (`antelopev2`, insightface family) is **non-commercial**.
+Enabling faces therefore makes the whole project non-commercial — see `NOTICE.md` §2.
+
+Details: `docs/Fstop-光圈-M0-实测记录.md` §9 (the M1 landing is §9.10, M2 is §9.14–§9.18).
 
 Documents, in reading order:
 

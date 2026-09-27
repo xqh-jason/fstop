@@ -92,4 +92,20 @@ describe('summarizeEgress', () => {
   it('空输入安全', () => {
     expect(summarizeEgress([])).toEqual({ entries: [], violations: [], total: 0 })
   })
+  it('页面自己的 origin 一律算本机（部署到 github.io/自建域名后不会对自己报警）', () => {
+    // M3 部署时才暴露的坑：只看 host 白名单的话，app 自己的 JS 与样例照片会被判成 external
+    const own = 'https://someone.github.io'
+    expect(summarizeEgress([{ name: `${own}/assets/app.js` }], own).violations).toEqual([])
+    expect(summarizeEgress([{ name: `${own}/samples/beach-01.jpg` }], own).entries[0]?.kind).toBe(
+      'local',
+    )
+    // 同一个 host 但不是自己的 origin（另一个 GitHub Pages 站点）仍然算违规
+    const other = 'https://someone-else.github.io'
+    expect(summarizeEgress([{ name: `${other}/x.js` }], own).violations).toEqual([other.slice(8)])
+  })
+
+  it('不给 ownOrigin 时行为不变（老调用点不静默改变判定）', () => {
+    const summary = summarizeEgress([{ name: 'https://someone.github.io/x.js' }])
+    expect(summary.violations).toHaveLength(1)
+  })
 })

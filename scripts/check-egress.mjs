@@ -13,7 +13,14 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 /** 唯一允许发起网络请求的文件（模型权重下载）。新增条目必须单独评审并同步更新 NOTICE。 */
-export const EGRESS_WHITELIST = ['src/storage/models.ts']
+/**
+ * 白名单：允许出现网络调用的文件。
+ * - `models.ts`：模型权重的唯一来源（冷缓存时下载权重）；
+ * - `photo-source-http.ts`：读**同源**静态文件（内置样例库 `public/samples/`、基准语料），
+ *   URL 由调用方传的 `location.origin` 拼出，同源只读；它照样受运行时两层断言检查，
+ *   拿不到「免检」待遇（见该文件头部注释）。
+ */
+export const EGRESS_WHITELIST = ['src/storage/models.ts', 'src/storage/photo-source-http.ts']
 
 /** @typedef {{ file: string, line: number, rule: string, text: string }} Violation */
 

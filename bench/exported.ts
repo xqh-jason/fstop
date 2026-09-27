@@ -33,7 +33,7 @@ import {
 } from '../src/storage/models'
 import { DEFAULT_DECODE_OPTIONS, decodePhoto } from '../src/workers/decode'
 import { toPixelValues } from '../src/workers/embed-preprocess'
-import { HttpPhotoSource } from './http-photo-source'
+import { HttpPhotoSource } from '../src/storage/photo-source-http'
 import qualityQueries from './quality-queries.json'
 import corpusQueries from './corpus-queries.json'
 import { targetsOf } from './query-targets'

@@ -26,6 +26,8 @@ import type { DbService } from '../storage/db.worker'
 import { opfsDirectory, readOpfsFile } from '../storage/opfs'
 import { OpfsPhotoSource } from '../storage/photo-source-opfs'
 import { FileSystemAccessSource } from '../storage/photo-source-fsa'
+import { HttpPhotoSource } from '../storage/photo-source-http'
+import type { PhotoSource } from '../core/photo-source'
 import { VectorMatrix } from '../storage/vector-matrix'
 import { browserLockKeeper, PRIMARY_LOCK } from '../storage/tab-primary-browser'
 import { electLeader, waitToPromote } from '../storage/tab-primary'
@@ -148,7 +150,16 @@ let vectors: VectorMatrix | null = null
 /** 人脸向量单独一个矩阵（space=face-arcface-r100）：与照片向量混存会让检索槽位语义崩掉 */
 let faceVectors: VectorMatrix | null = null
 let thumbsDir: FileSystemDirectoryHandle | null = null
-let source: FileSystemAccessSource | null = null
+/** 当前照片来源：真实目录（FSA）/ 合成根（自动化）/ 内置样例（HTTP，同源只读） */
+let source: PhotoSource | null = null
+/** 内置样例模式：UI 上要如实说明「你正在看的是内置样例，不是你的照片」 */
+const samplesMode = ref(false)
+/** 当前生效的 rootId —— 不同来源不同根，别再各处重算（人脸流水线也曾算错一次） */
+const SAMPLES_ROOT_KEY = 'bundled-samples'
+function currentRootId(): string {
+  if (samplesMode.value) return SAMPLES_ROOT_KEY
+  return ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY
+}
 let modelId = ''
 let dim = 0
 let controller: AbortController | null = null
@@ -227,7 +238,7 @@ async function runFacePipeline(): Promise<void> {
   facing.value = true
   faceStatus.value = '正在加载人脸模型（首次约 300 MB）…'
   try {
-    const rootId = ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY
+    const rootId = currentRootId()
     const controller = new AbortController()
     await runFaces({
       rootId,
@@ -379,7 +390,7 @@ async function boot(): Promise<void> {
     })
     face = Comlink.wrap<FaceService>(faceWorker)
 
-    const rootId = ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY
+    const rootId = currentRootId()
     await db.open(rootId)
 
     if (ROOT_MODE === 'opfs') {
@@ -448,6 +459,29 @@ async function resumeFolder(): Promise<void> {
   }
 }
 
+/**
+ * 试用内置样例（M3「打开即可体验」）。
+ *
+ * 用户不选目录也能先跑一遍索引与检索 —— 这是发布版第一屏最重要的东西：
+ * 「这玩意儿到底是什么」不该要求先授权一个真实照片目录。
+ * 样例来自 `public/samples/`（CC0 / 公有领域，见 NOTICE §4），同源 HTTP 读，只读不写。
+ * 样例模式**不持久化**：刷新后回到「选目录」状态，避免用户误以为自己的照片被索引进去了。
+ */
+async function startSamples(): Promise<void> {
+  if (indexing.value) return
+  try {
+    const samples = await HttpPhotoSource.openBundledSamples(SAMPLES_ROOT_KEY, location.origin)
+    source = samples
+    samplesMode.value = true
+    notice.value = null
+    rootLabel.value = `内置样例 · ${String(samples.count)} 张（public/samples，CC0）`
+  } catch (error) {
+    notice.value = `内置样例不可用：${error instanceof Error ? error.message : String(error)}`
+    return
+  }
+  await startIndex()
+}
+
 async function startIndex(): Promise<void> {
   if (
     !ready.value ||
@@ -466,7 +500,7 @@ async function startIndex(): Promise<void> {
   controller = new AbortController()
   try {
     await runIndex({
-      rootId: ROOT_MODE === 'opfs' ? 'opfs-corpus' : DEFAULT_ROOT_KEY,
+      rootId: currentRootId(),
       source,
       db,
       embed,
@@ -628,7 +662,19 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
         已选定 <code>{{ rootLabel }}</code>
         <span v-if="permission !== 'granted'" class="warn">（权限：{{ permission }}）</span>
       </p>
+      <p v-if="samplesMode" class="hint">
+        当前索引的是仓库自带的样例图片（不是你的照片）。样例可以在
+        <code>public/samples/</code> 里换成你自己的。要索引自己的照片，点「选择文件夹」。
+      </p>
       <div class="row">
+        <button
+          class="button button--ghost"
+          :disabled="indexing || !ready || !supported"
+          data-testid="try-samples"
+          @click="startSamples"
+        >
+          先试用内置样例
+        </button>
         <button v-if="supported" class="button" :disabled="indexing" @click="chooseFolder">
           选择文件夹
         </button>

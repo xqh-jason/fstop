@@ -10,9 +10,15 @@
 剩下的 M1 边角只有索引侧预处理（**已决定不做**）与人工精编 query（**卡在取材**），理由见 §9B 末段。
 
 **M2 四项全部收口**（2026-09-26）：① 相似/重复图分组；② 检索结果按时间/相似度重排；
-③ 人脸聚类与人物命名（检测 SCRFD-34g → 5 点对齐 → antelopev2/r100 识别 → 质心聚类 →
+③ 人脸聚类与人物命名（检测 SCRFD-34g → 5 点对齐 → antelopev2/r100 识别 → **全链约束**聚类 →
 面板上命名/合并/拆分）；④ 离线能力可视化面板（用户可亲眼核对「只向模型 origin 发请求」）。
-`pnpm verify` 19 个测试文件 / 212 项全绿；五条端到端（app / wall / tabs / similar / **faces**）全绿。
+`pnpm verify` 19 个测试文件 / **216 项全绿**；五条端到端（app / wall / tabs / similar / **faces**）全绿。
+
+**M3（发布形态）进行中**（2026-09-26）：构建产物已验证**可静态部署**、`pnpm build` 后
+「先试用内置样例」（39 张 CC0，`public/samples/`）通路跑通并端到端钉住（`bench/e2e-samples.mjs`，
+11 条断言）；技术说明与发布材料已成文。**实际部署与推广动作未做**（见实测记录 §9.19）。
+部署时暴露并修掉一个真 bug：离线面板只按 host 白名单判本机，部署后会把 app 自己的 origin 判成违规
+（分类函数现收 `ownOrigin`）。
 
 **M2 的两个关键教训**（都是实测暴露的，细节见实测记录 §9.17/§9.18）：
 - **预处理参数口径**：`rgbaToChw` 先把像素除以 255 再套 mean/std，所以 `(v-127.5)/127.5`
@@ -89,6 +95,8 @@ en 38.7% → 34.9%（9 vs 5，p = 0.424）。细节见实测记录 §9.5/§9.9/*
 | `bench/index-probe.mjs` / `bench/trace-run.mjs` | ✅ M1 | 索引吞吐探针（端到端 + CPU 剖面 + 零外发）与逐阶段打点驱动器；**死循环根因就是它们抓出来的** |
 | `src/storage/migrations.ts` | ✅ | 手写迁移链 + 事务化 `applyMigrations`（失败整体回滚） |
 | `src/storage/models.ts` | ✅ | **全项目唯一允许联网的模块**；模型目录（含实测字节数、`towers` 字段）、运行时 env 配置 |
+| `src/storage/photo-source-http.ts` | ✅ M3 | `PhotoSource` 的同源 HTTP 实现：**内置样例库**（`public/samples/`，39 张 CC0）与基准语料共用一份。`src/` 里第二个允许 `fetch` 的文件，URL 由调用方传 `location.origin` 拼出（同源只读），仍受运行时两层断言检查 |
+| `bench/e2e-samples.mjs` | ✅ M3 | **构建产物**端到端：自起静态服务器托管 `dist/` → 点「先试用内置样例」→ 索引 39 张 → 检索 → 离线面板不误报自身 origin → 脚本侧独立核对零外发（11 条断言） |
 | `src/storage/opfs.ts` | ✅ | OPFS 基础操作 |
 | `src/storage/photo-source-opfs.ts` | ✅ | `PhotoSource` 的 OPFS 实现（合成根） |
 | `src/storage/vector-matrix.ts` | ✅ | 自实现扁平向量矩阵（顺序追加；槽位同步预留） |

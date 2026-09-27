@@ -19,7 +19,7 @@ import type { EmbedService } from '../src/workers/embed.worker'
 import type { CorpusFile, CorpusSink } from './corpus'
 import { DEFAULT_CORPUS, generateCorpus } from './corpus'
 import { FileListPhotoSource } from './file-list-source'
-import { HttpPhotoSource } from './http-photo-source'
+import { HttpPhotoSource } from '../src/storage/photo-source-http'
 
 const params = new URLSearchParams(location.search)
 const COUNT = Number(params.get('count') ?? 200)

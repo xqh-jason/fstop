@@ -47,7 +47,10 @@ async function refreshUsage(): Promise<void> {
   }
 }
 
-const summary = computed<EgressSummary>(() => summarizeEgress(resources.value))
+// 必须传自己的 origin（部署到静态站点后 app 自己的资源会被判成外部的，见 core/egress-ledger 注释）
+const summary = computed<EgressSummary>(() =>
+  summarizeEgress(resources.value, typeof location === 'undefined' ? undefined : location.origin),
+)
 const clean = computed(() => summary.value.violations.length === 0)
 
 onMounted(() => {

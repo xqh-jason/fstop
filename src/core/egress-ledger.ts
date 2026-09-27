@@ -2,9 +2,14 @@
  * 外发账本（M2）—— 把「运行时不外发」从一句口号变成用户能亲眼核对的一屏。
  *
  * 口径（计划 §11.4）：**除模型 origin 外零请求**。这里把页面实际发过的请求按 host 分成三类：
- * - `local`：本机 dev server / `localhost` / `127.0.0.1` / 内网地址（自己的静态资源）
+ * - `local`：**页面自己的 origin**（部署后可能是 `https://user.github.io`，不只是 localhost）、
+ *   `localhost` / `127.0.0.1` / 内网地址（自己的静态资源）
  * - `model`：模型权重 origin（白名单，冷缓存时下载权重）
  * - `external`：其余一律算**违规**——界面必须红着显示，而不是藏起来
+ *
+ * ⚠ **必须把页面自己的 origin 当成「本机」**（M3 部署时才暴露的坑）：只看 host 白名单的话，
+ * 部署到静态站点后 app 加载自己的 JS/样例照片会被判成 `external`，离线面板对着自己报警 ——
+ * 一个会误报的面板等于没有面板。所以分类函数收 `ownOrigin`，页面传 `location.origin`。
  *
  * 为什么在应用内做这件事（而不是只靠测试脚本的 request hook）：
  * 「零外发」是给用户看的承诺，用户手里没有 Playwright。应用自己记账、自己显示，
@@ -40,7 +45,10 @@ export interface EgressSummary {
 }
 
 /** 判断一个 URL 属于哪一类；非 http(s)（blob:/data:）返回 null，不计数 */
-export function classifyUrl(rawUrl: string): { host: string; kind: EgressKind } | null {
+export function classifyUrl(
+  rawUrl: string,
+  ownOrigin?: string,
+): { host: string; kind: EgressKind } | null {
   let url: URL
   try {
     url = new URL(rawUrl)
@@ -51,6 +59,11 @@ export function classifyUrl(rawUrl: string): { host: string; kind: EgressKind } 
   // 它们的 host 是空串，混进来会被误判成「外部 origin」（实测踩过假红）
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
   const host = url.host
+  // 页面自己的 origin 一定是本机：部署后它可能是任意域名（github.io / 自建域名），
+  // 白名单式判断在这时会把 app 自己的静态资源算成违规（M3 部署时才暴露）
+  if (ownOrigin !== undefined && ownOrigin !== '' && url.origin === ownOrigin) {
+    return { host, kind: 'local' }
+  }
   return { host, kind: classifyHost(host) }
 }
 
@@ -79,10 +92,13 @@ function isPrivateAddress(hostname: string): boolean {
  * 输入刻意用「只需要 url 字段」的形状：浏览器给的是 `PerformanceResourceTiming`，
  * 测试里给字符串数组，两边都能喂同一个实现（不写第二份分类逻辑）。
  */
-export function summarizeEgress(resources: readonly { name: string }[]): EgressSummary {
+export function summarizeEgress(
+  resources: readonly { name: string }[],
+  ownOrigin?: string,
+): EgressSummary {
   const byHost = new Map<string, EgressEntry>()
   for (const resource of resources) {
-    const classified = classifyUrl(resource.name)
+    const classified = classifyUrl(resource.name, ownOrigin)
     if (classified === null) continue
     const existing = byHost.get(classified.host)
     if (existing === undefined) {
