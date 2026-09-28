@@ -11,9 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # 不要在这里写 version：package.json 的 packageManager 已经是唯一来源，
+      # 两边都写会直接报「Multiple versions of pnpm specified」（CI 曾因此长期红着）。
       - uses: pnpm/action-setup@v6
-        with:
-          version: 11
 
       - uses: actions/setup-node@v7
         with:
