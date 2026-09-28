@@ -12,7 +12,7 @@ export default defineConfigWithVueTs(
   {
     name: 'fstop/rules',
     rules: {
-      // 网络访问的唯一约束点是 scripts/check-egress.mjs（见 docs 项目计划 §11.4），
+      // 网络访问的唯一约束点是 scripts/check-egress.mjs（不变量见 docs/DESIGN.md），
       // 这里不重复声明同类规则。
       'no-console': ['warn', { allow: ['warn', 'error'] }],
       eqeqeq: ['error', 'always'],

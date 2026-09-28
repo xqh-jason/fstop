@@ -23,6 +23,10 @@ const USER_AGENT = 'fstop-faces-corpus-fetcher/0.1 (+https://github.com/xqh-jaso
 const OUTPUT_DIR = path.join(process.cwd(), 'bench', 'corpus-faces')
 const MANIFEST = path.join(OUTPUT_DIR, 'manifest.json')
 
+/** 清单里写明「照片不入库」，免得后来的人误以为照片可以跟着提交。 */
+const MANIFEST_NOTE =
+  '照片本体不入库（.gitignore 已覆盖 bench/corpus-faces/）：本清单只记录来源、许可与 sha256，供按同一批公有领域肖像复现基准。'
+
 /** 每个人的候选分类：多分类是为了拿到不同年份/角度的脸（同人不同光照才是真实难度） */
 const PEOPLE = [
   {
@@ -154,7 +158,7 @@ async function main() {
 
   await writeFile(
     MANIFEST,
-    `${JSON.stringify({ generatedAt: new Date().toISOString(), files }, null, 2)}\n`,
+    `${JSON.stringify({ generatedAt: new Date().toISOString(), note: MANIFEST_NOTE, files }, null, 2)}\n`,
   )
   const byPerson = files.reduce((acc, entry) => {
     acc[entry.person] = (acc[entry.person] ?? 0) + 1

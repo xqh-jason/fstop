@@ -31,7 +31,9 @@
     "test:coverage": "vitest run --coverage",
     "bench": "node bench/runner.mjs",
     "check:egress": "node scripts/check-egress.mjs",
-    "verify": "pnpm typecheck && pnpm lint && pnpm check:egress && pnpm test",
+    "notices": "node scripts/make-third-party-notices.mjs",
+    "notices:check": "node scripts/make-third-party-notices.mjs --check",
+    "verify": "pnpm typecheck && pnpm lint && pnpm check:egress && pnpm notices:check && pnpm test",
     "release:package": "node scripts/make-release.mjs"
   },
   "dependencies": {

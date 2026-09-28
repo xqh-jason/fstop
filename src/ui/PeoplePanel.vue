@@ -172,6 +172,13 @@ function nameOf(cluster: ClusterRow): string {
       </div>
     </header>
 
+    <p class="people__license" data-testid="people-license">
+      人脸识别模型
+      <code>antelopev2</code
+      >（insightface）是<strong>非商用</strong>许可：启用后本项目不得用于商业用途，
+      许可出处与限制见仓库根目录的 <code>NOTICE</code>。
+    </p>
+
     <p v-if="!ran" class="people__empty" data-testid="people-untouched">
       还没有跑过人脸识别。点「识别人脸」后，照片会在本机完成检测与聚类（首次需要下载人脸模型约 300
       MB，之后离线可用）。
@@ -359,11 +366,16 @@ function nameOf(cluster: ClusterRow): string {
 }
 
 .people__empty,
-.people__summary {
+.people__summary,
+.people__license {
   margin: 0.75rem 0 0;
   font-size: 0.875rem;
   color: var(--text-dim);
   line-height: 1.6;
+}
+
+.people__license {
+  font-size: 0.8125rem;
 }
 
 .people__clusters {

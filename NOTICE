@@ -9,7 +9,7 @@ Fstop 本身以 MIT 许可发布，见 `LICENSE`。
 ## 1. 模型权重：一律不随仓库分发
 
 仓库内**不存放任何模型权重**。`public/models/` 只允许存放清单（model id / 文件名 / 体积 / 校验值），
-权重由 §4 的脚本在用户机器上拉取。这样「除模型权重外零出站请求」是结构上成立的，而不是措辞上的。
+权重由 `scripts/fetch-models.mjs` 在用户机器上拉取。这样「除模型权重外零出站请求」是结构上成立的，而不是措辞上的。
 
 | 资产 | 来源 | 许可 | 本仓库是否分发 |
 |---|---|---|---|
@@ -26,7 +26,7 @@ Fstop 本身以 MIT 许可发布，见 `LICENSE`。
 （`bench/export/`，已 gitignore）。这些文件**是权重**（源权重的改写版），
 因此同样**不进仓库、不进 `public/`**，只在本地生成，校验值见 `bench/export/manifest*.json`。
 
-**分发方式已定：只走本地生成**（`docs/Fstop-光圈-交接说明.md` §9B）。上游模型卡未声明许可，
+**分发方式已定：只走本地生成**（取舍与理由见 `docs/DESIGN.md`）。上游模型卡未声明许可，
 把派生产物上传到任何公开仓库都等于再分发，与本节结论冲突，所以不建仓库、不上 HF。
 落地方式是 `bench/export-towers.py --deploy <size>`：把选定档位拷到 `public/models/derived/`
 （**已 gitignore**，仓库里永远没有权重文件），由 vite 以同源静态文件服务；
@@ -53,15 +53,19 @@ app 启动时探测该目录的 `manifest.json`，探测不到就回落到原生
 
 ## 3. 运行时依赖
 
-| 依赖 | 许可 |
-|---|---|
-| `@huggingface/transformers` | Apache-2.0 |
-| `onnxruntime-web` | MIT |
-| `@sqlite.org/sqlite-wasm` | Apache-2.0 / 见其仓库 |
-| `comlink` | Apache-2.0 |
-| Vue / Vite / Vitest / ESLint / Prettier | MIT |
+| 依赖 | 版本 | 许可 |
+|---|---|---|
+| `@huggingface/transformers` | 4.3.0 | Apache-2.0 |
+| `onnxruntime-web` | 1.31.0-dev.20260914-8d85527a0 | MIT |
+| `@sqlite.org/sqlite-wasm` | 3.53.4-build1 | Apache-2.0 |
+| `comlink` | 4.4.2 | Apache-2.0 |
+| `vue` | 3.5.43 | MIT |
 
-> 依赖尚未引入，接入时逐个核对并在此表补全实际版本与许可文件路径。
+> 完整的第三方许可清单（生产依赖图 68 个包、逐包版本、许可正文）见 **`THIRD_PARTY_NOTICES.md`**，
+> 由 `scripts/make-third-party-notices.mjs` 从真实依赖图生成，`pnpm verify` 会检查它是否过期。
+> 开发与构建期依赖（Vite / Vitest / ESLint / Prettier / TypeScript / Playwright）不进入发行物。
+> 注意生产依赖图里的 `sharp` / `@img/sharp-libvips-*`（LGPL-3.0-or-later）/ `onnxruntime-node`
+> 只用于 Node 侧，**不进入浏览器产物**（`dist/` 中引用数为 0），因此不构成再分发。
 
 ## 4. 内置样例图片库（`public/samples/`）
 
@@ -89,4 +93,5 @@ app 启动时探测该目录的 `manifest.json`，探测不到就回落到原生
 
 ---
 
-本文件是 DoD 的一部分：`NOTICE` 必须与实际使用的权重一致（见 docs 项目计划 §十二）。
+本文件必须与实际使用的权重保持一致；依赖侧的许可声明由 `THIRD_PARTY_NOTICES.md` 覆盖，
+两者都由门禁检查（`NOTICE` 与代码同仓库，依赖清单由 `pnpm verify` 校验是否过期）。

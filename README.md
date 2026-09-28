@@ -85,13 +85,14 @@ is MIT and does not restrict anything. If you need commercial use, use search an
 
 ## Documents
 
-| File                                       | What it is                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------ |
-| [`README.zh-CN.md`](README.zh-CN.md)       | 中文说明（内容与本文一致）                                         |
-| [`docs/DESIGN.md`](docs/DESIGN.md)         | Architecture, the decisions and their alternatives, the invariants |
-| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Every measured number and how to reproduce it                      |
-| [`CHANGELOG.md`](CHANGELOG.md)             | Release history                                                    |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md)       | How to contribute                                                  |
-| [`SECURITY.md`](SECURITY.md)               | Threat model and how to report a vulnerability                     |
-| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Contributor Covenant 2.1                                           |
-| [`NOTICE`](NOTICE)                         | Model origins, licences and redistribution limits                  |
+| File                                               | What it is                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------ |
+| [`README.zh-CN.md`](README.zh-CN.md)               | 中文说明（内容与本文一致）                                         |
+| [`docs/DESIGN.md`](docs/DESIGN.md)                 | Architecture, the decisions and their alternatives, the invariants |
+| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)         | Every measured number and how to reproduce it                      |
+| [`CHANGELOG.md`](CHANGELOG.md)                     | Release history                                                    |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)               | How to contribute                                                  |
+| [`SECURITY.md`](SECURITY.md)                       | Threat model and how to report a vulnerability                     |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)         | Contributor Covenant 2.1                                           |
+| [`NOTICE`](NOTICE)                                 | Model origins, licences and redistribution limits                  |
+| [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | Third-party packages shipped in the build, with licences           |

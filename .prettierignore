@@ -3,3 +3,5 @@ coverage/
 node_modules/
 pnpm-lock.yaml
 docs/
+# 由 scripts/make-third-party-notices.mjs 生成，格式由生成器负责（pnpm verify 会检查是否过期）
+THIRD_PARTY_NOTICES.md

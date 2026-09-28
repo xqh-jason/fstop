@@ -130,7 +130,7 @@ export function configureModelRuntime(options: ModelRuntimeOptions = {}): void {
 //   输入 `input.1` [1,3,640,640]；输出三档 stride（8/16/32）各一组
 //   `score_{s}` [N,1] + `bbox_{s}` [N,4] + `kps_{s}` [N,10]，N = (640/s)² × 2 个 anchor
 // - 识别 `immich-app/antelopev2/recognition/model.onnx`（glintr100/r100 重导出），
-//   **非商用**（insightface 的 license，见 NOTICE §3），260.7 MB
+//   **非商用**（insightface 的 license，见 NOTICE §2），260.7 MB
 //   输入 `input.1` [None,3,112,112]；输出 [1,512]（未归一化，需 L2 归一化）
 //
 // 为什么不做成本地派生产物：这两个权重的输入尺寸与我们的用法一致（640 检测、112 对齐识别），
@@ -175,7 +175,7 @@ export const FACE_RECOGNIZER: FaceRecognizerSpec = {
   modelId: 'immich-app/antelopev2',
   url: `${FACE_MODEL_HOST}/immich-app/antelopev2/resolve/main/recognition/model.onnx`,
   bytes: 260665334,
-  license: '非商用（insightface antelopev2）—— 见 NOTICE §3',
+  license: '非商用（insightface antelopev2）—— 见 NOTICE §2',
   inputSize: 112,
   dim: 512,
 }

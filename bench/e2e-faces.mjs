@@ -138,6 +138,16 @@ await page
     throw new Error('索引超时')
   })
 
+// ——— 2.5 启用之前，界面必须已经告知非商用许可（NOTICE §2 的要求）———
+{
+  const text = (await page.locator('[data-testid="people-license"]').first().textContent()) ?? ''
+  check(
+    '人脸面板在启用前就告知非商用许可',
+    /非商用/.test(text) && /antelopev2/.test(text),
+    text.trim().slice(0, 32),
+  )
+}
+
 // ——— 3. 跑人脸识别（首次会下载人脸模型）———
 console.log('跑人脸识别（首次要下载人脸模型，约 300 MB）…')
 await page.locator('[data-testid="people-run"]').click()

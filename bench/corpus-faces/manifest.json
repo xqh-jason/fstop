@@ -1,5 +1,6 @@
 {
   "generatedAt": "2026-09-26T03:47:32.440Z",
+  "note": "照片本体不入库（.gitignore 已覆盖 bench/corpus-faces/）：本清单只记录来源、许可与 sha256，供按同一批公有领域肖像复现基准。",
   "files": [
     {
       "file": "obama-01.jpg",

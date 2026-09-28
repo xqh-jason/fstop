@@ -89,13 +89,14 @@ Apple M2 / Chrome 153 上、用 **783 张真实 CC0 照片**实测，复现命�
 
 ## 文档
 
-| 文件                                       | 内容                                         |
-| ------------------------------------------ | -------------------------------------------- |
-| [`README.md`](README.md)                   | English README（与本文等价）                 |
-| [`docs/DESIGN.md`](docs/DESIGN.md)         | 架构、每个决策与否掉的备选、必须守住的不变量 |
-| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | 每一个实测数字与复现方法                     |
-| [`CHANGELOG.md`](CHANGELOG.md)             | 版本变更                                     |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md)       | 如何贡献                                     |
-| [`SECURITY.md`](SECURITY.md)               | 威胁模型与漏洞上报方式                       |
-| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | 贡献者行为准则（Contributor Covenant 2.1）   |
-| [`NOTICE`](NOTICE)                         | 模型出处、许可与再分发限制                   |
+| 文件                                               | 内容                                         |
+| -------------------------------------------------- | -------------------------------------------- |
+| [`README.md`](README.md)                           | English README（与本文等价）                 |
+| [`docs/DESIGN.md`](docs/DESIGN.md)                 | 架构、每个决策与否掉的备选、必须守住的不变量 |
+| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)         | 每一个实测数字与复现方法                     |
+| [`CHANGELOG.md`](CHANGELOG.md)                     | 版本变更                                     |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)               | 如何贡献                                     |
+| [`SECURITY.md`](SECURITY.md)                       | 威胁模型与漏洞上报方式                       |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)         | 贡献者行为准则（Contributor Covenant 2.1）   |
+| [`NOTICE`](NOTICE)                                 | 模型出处、许可与再分发限制                   |
+| [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | 随产物分发的第三方包与许可                   |
