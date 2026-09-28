@@ -39,18 +39,21 @@ model origin — including the app's own origin, which must never show up as a v
 
 ## Hard limits
 
-| Property          | Target                                                                                                               |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Photos copied     | **0 bytes**                                                                                                          |
-| Outbound requests | **Zero beyond model weight downloads** — enforced by CI, not by eyeballing the network panel                         |
-| Platform          | Desktop Chromium (Chrome / Edge 86+). Firefox and Safari lack the directory picker; mobile is out of scope by design |
-| Core              | `src/core/` is hand-written and unit-tested; index and retrieval logic is meant to be read                           |
+| Property          | Target                                                                                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Photos copied     | **0 bytes**                                                                                                                                           |
+| Outbound requests | **Zero beyond model weight downloads** — enforced by CI, not by eyeballing the network panel                                                          |
+| Platform          | Desktop Chromium (Chrome / Edge **113+**, WebGPU required). Firefox and Safari lack the directory picker and WebGPU; mobile is out of scope by design |
+| Core              | `src/core/` is hand-written and unit-tested; index and retrieval logic is meant to be read                                                            |
 
 ## Status
 
-**M0 (feasibility) complete.** Scaffold, governance files, the data model, the two core interfaces and the
-end-to-end indexing pipeline (decode → embed → thumbnail → OPFS vector matrix → SQLite) all work; the five
-M0 measurements are in. M1 (MVP) is in progress: the "10k photos in 10 minutes" item has landed and been measured.
+**M0 (feasibility), M1 (MVP) and M2 (differentiating features) are complete.** Scaffold, governance files,
+the data model, the two core interfaces and the end-to-end pipeline (decode → embed → thumbnail → OPFS vector
+matrix → SQLite) all work, "10k photos in 10 minutes" is measured rather than extrapolated, and Tauri-scale
+performance work is the only thing left of M1's list. M3 (release form) landed too: a self-contained static
+build, a bundled sample library so the app is usable before you hand over a folder, and the release material
+in `docs/Fstop-光圈-发布材料.md`.
 
 Measured on an M2 / Chrome 153: 783 real CC0 photos indexed at **13.6 photos/s → 10k extrapolates to 12.3 min**
 (acceptance line 20 min, sprint target 10 min), search latency 78 ms (budget 300 ms), Chinese-query retrieval
@@ -110,9 +113,15 @@ code otherwise. The static egress check cannot see inside dependencies; this is 
 | Offline-capability panel     | records the requests the browser _actually_ makes, groups them by host, shows local storage/size, names any offending host in red            | 6 assertions in `bench/e2e-app.mjs`, one of them cross-checked against the test script's own request hook                                 |
 
 Note the face models' licence: the recogniser (`antelopev2`, insightface family) is **non-commercial**.
-Enabling faces therefore makes the whole project non-commercial — see `NOTICE.md` §2.
+Enabling faces therefore makes the whole project non-commercial — see `NOTICE` §2.
 
-Details: `docs/Fstop-光圈-M0-实测记录.md` §9 (the M1 landing is §9.10, M2 is §9.14–§9.18).
+The people panel renders face crops at **≥100 px**, cropped by scaling the thumbnail so the face box fills the
+cell and the face _centre_ lands on the cell centre (both are pure ratios, so they hold at any photo or
+thumbnail size) — a 64 px cell and a corner-aligned crop were both reported as bugs by real use and are now
+pinned by pixel-level assertions in `bench/e2e-faces.mjs`.
+
+Details: `docs/Fstop-光圈-M0-实测记录.md` §9 (M1 lands in §9.10, M2 in §9.14–§9.18, M3 and the three UI
+fixes in §9.19–§9.21).
 
 Documents, in reading order:
 

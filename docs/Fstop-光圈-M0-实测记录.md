@@ -906,7 +906,7 @@ host 账本里**只有自己的 origin**：模型权重走浏览器 Cache 命中
 - `docs/Fstop-光圈-发布材料.md`（新）：GitHub topics、Show HN 稿、V2EX / 少数派稿、发布前检查清单、发布后要盯的三件事。
 - `README.md`：新增 **Try it**（内置样例 + 静态部署 + 验证命令），Status 补 M2 四项与实测数字，
   并写明人脸模型的非商用约束。
-- `NOTICE.md` §2 / README 许可段：`antelopev2` 非商用条款（启用即约束整个项目）。
+- `NOTICE` §2 / README 许可段：`antelopev2` 非商用条款（启用即约束整个项目）。
 
 ### 6. M3 还没做的
 

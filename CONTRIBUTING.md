@@ -27,7 +27,23 @@ pnpm verify       # typecheck + lint + zero-egress check + unit tests
 pnpm build        # typecheck + production build
 ```
 
-Requirements: Node `>=22.22` (unit tests run the real SQLite schema through `node:sqlite`) and pnpm 11. Target runtime is **desktop Chromium only** (Chrome / Edge 86+); Firefox and Safari are out of scope by design — see the project plan in `docs/`.
+Requirements: Node `>=22.22` (unit tests run the real SQLite schema through `node:sqlite`) and pnpm 11. Target runtime is **desktop Chromium only** (Chrome / Edge **113+**, WebGPU required); Firefox and Safari
+are out of scope by design — see the project plan in `docs/`.
+
+Critical paths are covered by end-to-end scripts (each starts its own browser and server, and asserts **zero
+external requests beyond the model origin** at runtime):
+
+```bash
+node bench/e2e-app.mjs        # scan → index → search → incremental rescan → offline panel
+node bench/e2e-wall.mjs       # ten-thousand-photo wall, virtual scrolling
+node bench/e2e-tabs.mjs       # second tab degrades to read-only instead of failing
+node bench/e2e-similar.mjs    # similar/duplicate grouping
+node bench/e2e-faces.mjs      # face detect → cluster → name/merge/split + people-panel rendering
+pnpm build && node bench/e2e-samples.mjs   # the built artifact as a static site, bundled samples
+```
+
+Changes that touch the UI must ship a **pixel-level** assertion (element present, geometry as computed, crop
+content non-flat) — data-only assertions pass while the screen is blank.
 
 ## Benchmarks
 

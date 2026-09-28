@@ -10,6 +10,7 @@
  * 用法：
  *   pnpm build && node bench/e2e-samples.mjs      # 默认静态托管 dist/（端口 5190）
  *   E2E_PORT=6001 node bench/e2e-samples.mjs
+ *   E2E_DIST=~/code/fstop-release/fstop-0.3.0-dist node bench/e2e-samples.mjs   # 验证发布物本身
  */
 
 import { chromium } from '@playwright/test'
@@ -17,7 +18,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
-const DIST = path.resolve('dist')
+const DIST = path.resolve(process.env.E2E_DIST ?? 'dist')
 const PORT = Number(process.env.E2E_PORT ?? 5190)
 const BASE = `http://127.0.0.1:${PORT}`
 /**
