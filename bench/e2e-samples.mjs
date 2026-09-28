@@ -22,7 +22,13 @@ const DIST = path.resolve(process.env.E2E_DIST ?? 'dist')
 const PORT = Number(process.env.E2E_PORT ?? 5190)
 // 挂载前缀：用来验证「部署在子路径下」的形态（GitHub Pages 的项目站就是 /<repo>/）
 const BASE_PATH = (process.env.E2E_BASE_PATH ?? '/').replace(/\/*$/, '/')
-const BASE = `http://127.0.0.1:${PORT}${BASE_PATH}`
+/**
+ * `E2E_URL` 直连已部署的站点（不起本地服务器）—— 用来验「真的发出去的那一份」：
+ *   E2E_URL=https://<user>.github.io/<repo>/ node bench/e2e-samples.mjs
+ * 此时模型权重会从模型 origin 真下载一次（新 origin 是冷缓存）。
+ */
+const REMOTE = process.env.E2E_URL ?? ''
+const BASE = REMOTE !== '' ? REMOTE : `http://127.0.0.1:${PORT}${BASE_PATH}`
 /**
  * 样例库张数**从清单读**，不写死：写死过一次 40（真实是 39，`ls | wc -l` 把 manifest.json
  * 也算进去了），结果端到端红在一句「39/40」上 —— 断言数字写死就会这样烂掉。
@@ -80,7 +86,8 @@ const server = createServer((request, response) => {
         })
     })
 })
-await new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve))
+if (REMOTE === '') await new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve))
+else console.log(`直连线上站点：${BASE}\n`)
 
 const failures = []
 function check(label, ok, detail = '') {
@@ -201,7 +208,7 @@ try {
   console.error(error)
 } finally {
   await context.close()
-  server.close()
+  if (REMOTE === '') server.close()
 }
 
 if (failures.length === 0) {
