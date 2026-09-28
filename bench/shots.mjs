@@ -14,14 +14,15 @@
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { mkdirSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { extname, join, normalize, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { chromium } from 'playwright'
+import { chromium } from '@playwright/test'
 
 const DIST = resolve(process.env.E2E_DIST ?? join(homedir(), 'code/fstop-release/fstop-0.3.0-dist'))
 const OUT = resolve(process.env.SHOTS_OUT ?? join(homedir(), 'code/fstop-release/screenshots'))
 const PROFILE = resolve('.cache/bench-profile')
-const PORT = Number(process.env.SHOTS_PORT ?? 5196)
+const PORT = Number(process.env.SHOTS_PORT ?? 5195)
 const BASE = `http://127.0.0.1:${PORT}/`
 
 const MIME = {
@@ -52,6 +53,11 @@ const server = createServer(async (req, res) => {
 await new Promise((done) => server.listen(PORT, '127.0.0.1', done))
 mkdirSync(OUT, { recursive: true })
 
+// 上一轮被强杀会在 profile 里留下单例锁，Chrome 见到它直接拒绝启动（其它 bench 脚本同样处理）
+for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+  await rm(join(PROFILE, name), { force: true })
+}
+
 const context = await chromium.launchPersistentContext(PROFILE, {
   channel: 'chrome',
   headless: true,
@@ -65,8 +71,9 @@ const shot = async (name) => {
 }
 
 await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+// 冷缓存首次运行要下权重（131.8 MB），慢链路下可能好几分钟
 await page.waitForFunction(() => document.body.dataset.ready === 'true', undefined, {
-  timeout: 300_000,
+  timeout: 900_000,
 })
 
 // ① 索引进度：先滚到入口卡片，点下去立刻拍（进度条只在跑的时候存在）

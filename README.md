@@ -38,6 +38,18 @@ by the browser) — serve it from any static host. `pnpm build && node bench/e2e
 built artifact end to end: sample indexing, a search, and that no request leaves for a host other than the
 model origin — including the app's own origin, which must never show up as a violation.
 
+## Screenshots
+
+All four come from the built artifact, not the dev server — [`bench/shots.mjs`](bench/shots.mjs) regenerates them.
+
+| Indexing (progress and what is being indexed) | Search results                         |
+| --------------------------------------------- | -------------------------------------- |
+| ![Indexing](docs/screenshots/indexing.png)    | ![Search](docs/screenshots/search.jpg) |
+
+| The photo wall, full window width        | The offline-capability panel                   |
+| ---------------------------------------- | ---------------------------------------------- |
+| ![Photo wall](docs/screenshots/wall.jpg) | ![Offline panel](docs/screenshots/offline.png) |
+
 ## Hard limits
 
 | Property          | Target                                                                                                                                                |

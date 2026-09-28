@@ -36,6 +36,18 @@ pnpm dev            # 打开终端里打印的 localhost 地址
 
 打包发布物用 `pnpm release:package`：它会**剥掉派生的模型权重**并在产物里出现任何 `.onnx` 时直接失败（上游模型卡未授权再分发），同时生成 `SHA256SUMS` 与 `RELEASE.txt`。
 
+## 截图
+
+四张都取自**构建产物**（不是 dev server）—— 由 [`bench/shots.mjs`](bench/shots.mjs) 重新生成。
+
+| 索引进行中（进度与在索引什么）         | 检索结果                                 |
+| -------------------------------------- | ---------------------------------------- |
+| ![索引](docs/screenshots/indexing.png) | ![检索结果](docs/screenshots/search.jpg) |
+
+| 照片墙（铺满窗口宽度）               | 离线能力面板                              |
+| ------------------------------------ | ----------------------------------------- |
+| ![照片墙](docs/screenshots/wall.jpg) | ![离线面板](docs/screenshots/offline.png) |
+
 ## 硬指标
 
 | 项目     | 目标                                                                                                                     |
