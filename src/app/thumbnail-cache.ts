@@ -1,5 +1,5 @@
 /**
- * 缩略图 objectURL 的 LRU 缓存 —— 万张级照片墙的关键约束（计划 §9C）。
+ * 缩略图 objectURL 的 LRU 缓存 —— 万张级照片墙的关键约束（docs/DESIGN.md）。
  *
  * 为什么必须显式回收：每张缩略图都 `URL.createObjectURL(blob)`，浏览器只在页面卸载或
  * 显式 `revokeObjectURL` 时释放它指向的 blob。滚过一万张不回收 = 一万个 blob 常驻，

@@ -1,7 +1,7 @@
 /**
- * M0 基准页 —— 端到端跑「扫描 → 解码 → 向量化 → 缩略图 → 入库」，产出 §九 第 4 项的 photos/s。
+ * M0 基准页 —— 端到端跑「扫描 → 解码 → 向量化 → 缩略图 → 入库」，产出 docs/BENCHMARKS.md 第 4 项的 photos/s。
  *
- * **这是 M0 的临时编排**：状态机与任务队列应当属于 `src/core/`（§11.3 约定 1），
+ * **这是 M0 的临时编排**：状态机与任务队列应当属于 `src/core/`（docs/DESIGN.md 约定 1），
  * 这里只是把同一条链路先接通、先测出数字，M1 落地时由 core 的状态机接管，本文件只留驱动器。
  *
  * URL 参数：`?count=200&decode=3&dtype=q4f16&device=webgpu&model=...&seed=...`
@@ -79,7 +79,7 @@ async function waitForDirectoryFiles(input: HTMLInputElement): Promise<File[]> {
   throw new Error('等待语料目录超时（bench/runner.mjs 应该用 setInputFiles 注入）')
 }
 
-/** §7.6：size + 首尾各 64 KB 的哈希；内容身份让移动/重命名不触发重算 */
+/** docs/DESIGN.md：size + 首尾各 64 KB 的哈希；内容身份让移动/重命名不触发重算 */
 async function contentHash(blob: Blob): Promise<string> {
   const slice = 64 * 1024
   const head = await blob.slice(0, slice).arrayBuffer()
@@ -228,7 +228,7 @@ async function main(): Promise<void> {
     timing.decodeMs = performance.now() - decodeStarted
     mark(`decode:done ${decoded.width}x${decoded.height}`)
 
-    // 串行化：GPU 只有一个会话，并发提交只会让队列互相排队（§7.4）
+    // 串行化：GPU 只有一个会话，并发提交只会让队列互相排队
     const embedStarted = performance.now()
     const next = embedChain.then(() => embed.embedImage(decoded.bitmap))
     embedChain = next.catch(() => undefined)

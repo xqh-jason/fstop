@@ -8,7 +8,7 @@ export default defineConfig({
     include: ['tests/unit/**/*.test.ts'],
     coverage: {
       provider: 'v8',
-      // 覆盖范围与硬约束一致（交接说明 §5 第 3 条写的是「`src/core/` 单测覆盖 ≥ 80%」）。
+      // 覆盖范围与硬约束一致（docs/DESIGN.md 的不变量里写的是「`src/core/` 单测覆盖 ≥ 80%」）。
       // 额外纳入两个**纯逻辑**的 storage 模块——它们不依赖浏览器 API，能在 node 里真跑：
       //   - `models.ts`：模型目录 / 下载量 / 运行时装配（含「wasm 不能来自 CDN」这条断言）
       //   - `migrations.ts`：迁移链与版本校验

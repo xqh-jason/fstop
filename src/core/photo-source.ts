@@ -1,5 +1,5 @@
 /**
- * PhotoSource —— 照片来源的唯一抽象。见 docs/Fstop-光圈-项目计划-v0.2.md §7.5
+ * PhotoSource —— 照片来源的唯一抽象。见 docs/DESIGN.md
  *
  * 实现：
  * - `FileSystemAccessSource`（storage/，M1）：真实目录，只持有句柄
@@ -26,7 +26,7 @@ export interface PhotoStat {
   /** epoch ms */
   readonly mtime: number
   /**
-   * `content_hash`：size + 首尾各 64 KB 的哈希（§7.6）。
+   * `content_hash`：size + 首尾各 64 KB 的哈希。
    * 来源无法廉价提供时留空，由扫描器在 `read()` 之后补齐——
    * 身份必须来自内容，`mtime + size` 在备份恢复或跨盘复制后会让整库重算。
    */

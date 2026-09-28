@@ -1,5 +1,5 @@
 /**
- * 多标签选主 —— `opfs-sahpool` VFS 每 origin 只允许一个实例（计划 §7.3），
+ * 多标签选主 —— `opfs-sahpool` VFS 每 origin 只允许一个实例（docs/DESIGN.md），
  * 第二个标签 `db.open()` 直接硬失败（实测：界面显示误导性的「还没有可索引的文件夹」）。
  * 所以在**碰数据库之前**先用 Web Locks 抢主：
  *

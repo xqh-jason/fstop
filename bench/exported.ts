@@ -1,11 +1,11 @@
 /**
- * 导出塔的 spike 页 —— 交接说明 §9A5 / §9B 的 D2 判定。
+ * 导出塔的 spike 页 —— docs/BENCHMARKS.md 的 D2 判定。
  *
  * 前置：`python3 bench/export-towers.py [--dtype q4f16|fp16]` 从 `.cache/models/.../model_<dtype>.onnx`
  * 切出子图（`bench/export/`，已 gitignore）。本页回答四个问题：
  *
  * 1. **成本**：只跑视觉塔要多久？224²（197 token）到 64²（17 token）各多少？
- *    —— 拆塔 spike（实测记录 §9.1）已证明 ORT 的 WebGPU EP 不会替我们剪图，所以这是唯一能
+ *    —— 拆塔 spike（docs/BENCHMARKS.md）已证明 ORT 的 WebGPU EP 不会替我们剪图，所以这是唯一能
  *    直接量到「视觉塔单独成本」的办法。
  * 2. **保真**：切出来的子图与原双塔模型的对应输出是否一致（余弦 ≈ 1）？
  *    不一致就说明图手术改变了语义，后面的数字全都不算。
@@ -281,7 +281,7 @@ async function main(): Promise<void> {
   }
   decoded.bitmap.close()
 
-  /** 最小二乘拟合 ms = 固定开销 + k × token —— §9A5 要的就是这两个数 */
+  /** 最小二乘拟合 ms = 固定开销 + k × token —— docs/DESIGN.md 要的就是这两个数 */
   const fit = (() => {
     const points = [...visionSessions.keys()]
       .sort((a, b) => a - b)
@@ -312,7 +312,7 @@ async function main(): Promise<void> {
   console.log(`拟合 ${JSON.stringify(fit)}；跨分辨率余弦 ${JSON.stringify(crossResolutionCosine)}`)
 
   // ── 3) 质量：图库内每张照片建一个矩阵（各分辨率各一份），query 走同一套 ground truth ──
-  //    默认是 39 张样例库 + 23 条 query（M0 那套，可与 §7 直接对照）；
+  //    默认是 39 张样例库 + 23 条 query（M0 那套，可与 docs/DESIGN.md 直接对照）；
   //    `?queries=corpus&gallery=bench/corpus` 换成 783 张真实语料 + 106 条 query
   //    （query 由 Commons 上传者写的英文标题转写，未看图，见 bench/corpus-queries.json）
   render({ phase: 'quality', runs: RUNS })

@@ -1,11 +1,11 @@
 /**
- * 推理 Worker —— 全应用**只有一个**实例（§7.4 拓扑决策）。
+ * 推理 Worker —— 全应用**只有一个**实例（docs/DESIGN.md 拓扑决策）。
  *
  * 为什么必须单实例：多实例意味着多份权重各自解析（内存峰值冲穿 1.5 GB 红线），
  * 且多个 GPU 会话互相争用队列，合并吞吐反而更低。CPU 侧的活（解码、缩略图、入库）
  * 才用多 worker 并行；GPU 侧串行。
  *
- * ⚠ M0 实测发现（会改变 §7.2 的默认模型选型）：
+ * ⚠ M0 实测发现（会改变 docs/DESIGN.md 的默认模型选型）：
  * `Xenova/chinese-clip-vit-base-patch16` 是**单文件双塔**模型，其 ONNX 图把两个塔的输入
  * 都声明为必填——只喂 `pixel_values` 会报 `Missing the following inputs: input_ids`，
  * 只喂 `input_ids` 会报 `Missing the following inputs: pixel_values`。
@@ -171,7 +171,7 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
   ) => Record<string, unknown>
 
   /**
-   * `EmbeddingProvider` 的契约是 `ImageBitmap`（§7.5，也是 Worker 间唯一可转移的图像载体），
+   * `EmbeddingProvider` 的契约是 `ImageBitmap`（docs/DESIGN.md，也是 Worker 间唯一可转移的图像载体），
    * 但 transformers.js 的 `RawImage.read` 只接受 Blob / canvas / RawImage，不接受 ImageBitmap。
    * 这层转换（一次 drawImage + 一次 getImageData，512² ≈ 1 MB）是契约落地的必要成本，
    * 不是可以省掉的拷贝。
@@ -192,7 +192,7 @@ async function load(options: EmbedWorkerOptions): Promise<LoadedModel> {
     return vector
   }
 
-  // ── 优先走派生单塔（图手术导出，实测记录 §9.5/§9.9）──────────────────────────
+  // ── 优先走派生单塔（图手术导出，docs/DESIGN.md）──────────────────────────
   // 原生单文件双塔每次调用都要把另一塔也算一遍，且视觉塔分辨率被导出写死在 224²（197 token）。
   // 派生塔把 192² 档的 1 万张外推推进 10 分钟冲刺线，质量损失在 783 张 / 106 条 query 上测不出。
   // 探测不到就回落（可选加速路径，不是硬依赖），但**失败原因必须带出去**——静默回落是 M0 的教训。

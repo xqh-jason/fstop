@@ -1,5 +1,5 @@
 /**
- * 向量矩阵 —— 自实现的扁平 `Float32Array` 存储（§7.1 删掉 `sqlite-vec` 后的替代）。
+ * 向量矩阵 —— 自实现的扁平 `Float32Array` 存储（docs/DESIGN.md 删掉 `sqlite-vec` 后的替代）。
  *
  * 为什么不用数据库存向量：1 万条 512 维向量的余弦排序约 10 MFLOP，在 Worker 内遍历扁平数组
  * 是毫秒级；把它塞进 SQLite 只是给 BLOB 付 I/O 代价。数据库里只留「照片 → 槽位」的映射

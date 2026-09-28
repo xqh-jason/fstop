@@ -1,6 +1,7 @@
 # Fstop
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![中文说明](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue)](README.zh-CN.md)
 
 **Local semantic photo search that runs in your browser. Pick a folder, let your own device index it, then find any photo with a sentence — photos are never copied, never uploaded, nothing to install, and the core is readable line by line.**
 
@@ -52,8 +53,8 @@ model origin — including the app's own origin, which must never show up as a v
 the data model, the two core interfaces and the end-to-end pipeline (decode → embed → thumbnail → OPFS vector
 matrix → SQLite) all work, "10k photos in 10 minutes" is measured rather than extrapolated, and Tauri-scale
 performance work is the only thing left of M1's list. M3 (release form) landed too: a self-contained static
-build, a bundled sample library so the app is usable before you hand over a folder, and the release material
-in `docs/Fstop-光圈-发布材料.md`.
+build, a bundled sample library so the app is usable before you hand over a folder, and a packaged release
+artifact (`pnpm release` — the derived weights are stripped, see [`CHANGELOG.md`](CHANGELOG.md)).
 
 Measured on an M2 / Chrome 153: 783 real CC0 photos indexed at **13.6 photos/s → 10k extrapolates to 12.3 min**
 (acceptance line 20 min, sprint target 10 min), search latency 78 ms (budget 300 ms), Chinese-query retrieval
@@ -120,16 +121,21 @@ cell and the face _centre_ lands on the cell centre (both are pure ratios, so th
 thumbnail size) — a 64 px cell and a corner-aligned crop were both reported as bugs by real use and are now
 pinned by pixel-level assertions in `bench/e2e-faces.mjs`.
 
-Details: `docs/Fstop-光圈-M0-实测记录.md` §9 (M1 lands in §9.10, M2 in §9.14–§9.18, M3 and the three UI
-fixes in §9.19–§9.21).
+Details, including the numbers behind every claim on this page: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md),
+and the reasoning behind the architecture: [`docs/DESIGN.md`](docs/DESIGN.md).
 
-Documents, in reading order:
+## Documents
 
-| File                               | What it is                                                                   |
-| ---------------------------------- | ---------------------------------------------------------------------------- |
-| `docs/Fstop-光圈-项目计划-v0.2.md` | The design source of truth (Chinese): scope, stack, milestones, metrics, DoD |
-| `docs/Fstop-光圈-M0-实测记录.md`   | M0 measurements and the four places they contradict the plan                 |
-| `docs/Fstop-光圈-交接说明.md`      | Handoff: current state, environment facts, known traps, next steps           |
+| File                                       | What it is                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| [`README.zh-CN.md`](README.zh-CN.md)       | 中文说明（内容与本文一致）                                         |
+| [`docs/DESIGN.md`](docs/DESIGN.md)         | Architecture, the decisions and their alternatives, the invariants |
+| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Every measured number, how to reproduce it, and what it disproved  |
+| [`CHANGELOG.md`](CHANGELOG.md)             | Release history                                                    |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)       | How to build, test and submit a change                             |
+| [`SECURITY.md`](SECURITY.md)               | Threat model and how to report a vulnerability                     |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Contributor Covenant 2.1                                           |
+| [`NOTICE`](NOTICE)                         | Model origins, licences and redistribution limits                  |
 
 Pre-1.0: expect `src/core/` to move.
 

@@ -1,7 +1,7 @@
 /**
  * 模型目录与运行时配置。
  *
- * **本文件是全项目唯一允许发起网络请求的模块**（见 `scripts/check-egress.mjs` 白名单与计划 §11.4）。
+ * **本文件是全项目唯一允许发起网络请求的模块**（见 `scripts/check-egress.mjs` 白名单与 docs/DESIGN.md）。
  * 注意一句实话：实际的 HTTP 请求由 `@huggingface/transformers` 内部发起，这里只负责
  * 「允许谁、从哪里、用什么 dtype」的声明的唯一入口。真正把「零外发」变成事实的是
  * M1 的运行时请求日志断言，静态检查只是第一道闸。
@@ -96,7 +96,7 @@ export function modelBytes(id: string, dtype: Dtype): number {
 }
 
 export interface ModelRuntimeOptions {
-  /** 自托管 / 镜像时改这里（§7.2 把权重同源化是让「只有一个 origin」成立的手段） */
+  /** 自托管 / 镜像时改这里（docs/DESIGN.md 把权重同源化是让「只有一个 origin」成立的手段） */
   readonly remoteHost?: string
   readonly allowRemoteModels?: boolean
   readonly useBrowserCache?: boolean
@@ -182,7 +182,7 @@ export const FACE_RECOGNIZER: FaceRecognizerSpec = {
 
 // ── 派生产物（图手术导出的单塔） ───────────────────────────────────────────────
 //
-// 背景（实测记录 §9.5/§9.9）：`Xenova/chinese-clip-vit-base-patch16` 是**单文件双塔**，
+// 背景（docs/DESIGN.md）：`Xenova/chinese-clip-vit-base-patch16` 是**单文件双塔**，
 // 且视觉塔的分辨率被导出写死在 224²/197 token。`bench/export-towers.py` 用图手术切出
 // 「视觉塔（任意分辨率）+ 文本塔」两个独立 ONNX，192² 档把 1 万张外推推进 10 分钟冲刺线，
 // 而质量损失在 783 张 / 106 条 query 上测不出来。

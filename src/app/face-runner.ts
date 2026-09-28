@@ -116,7 +116,7 @@ export async function runFaces(options: FaceRunnerOptions): Promise<FaceRunResul
 
       // 解码/读文件可以并发（吃 CPU，正好填 GPU 空档），但**推理必须串行**：
       // 同一个 ORT 会话不接受并发 run，并发提交会让标签页空转卡死（M1 已在嵌入路径上踩过，
-      // 见实测记录 §7.4「GPU 单会话」）。这里用同一把串行闸门把 GPU 那一段串起来。
+      // 见 docs/BENCHMARKS.md「GPU 单会话」）。这里用同一把串行闸门把 GPU 那一段串起来。
       const outcomes = await mapWithConcurrency(jobs, 2, async (job) => {
         update({ currentPath: job.relPath })
         let blob: Blob

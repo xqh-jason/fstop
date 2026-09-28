@@ -1,8 +1,8 @@
 /**
- * 数据模型 —— 见 docs/Fstop-光圈-项目计划-v0.2.md §7.6
+ * 数据模型 —— 见 docs/DESIGN.md
  *
  * 本文件是数据模型的唯一真相源：**DDL 与行类型必须成对修改**，
- * 任何新增列都要同时改这里、`migrations/` 与 §7.6 的表格。
+ * 任何新增列都要同时改这里、`migrations/` 与 docs/DESIGN.md 的表格。
  *
  * 约定：
  * - 所有时间戳都是 epoch 毫秒（INTEGER）。

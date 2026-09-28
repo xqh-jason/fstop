@@ -48,7 +48,7 @@ describe('schema v1 的真实执行结果', () => {
     applyMigrations(db, 0)
   })
 
-  it('建出 §7.6 定义的全部七张表', () => {
+  it('建出 docs/DESIGN.md 定义的全部七张表', () => {
     expect(tableNames()).toEqual([
       'clusters',
       'embeddings',

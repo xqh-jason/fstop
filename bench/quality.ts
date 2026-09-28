@@ -1,7 +1,7 @@
 /**
- * 检索质量页 —— M0 收口第 2 项：「中文 query 命中率」（交接说明 §9A2）。
+ * 检索质量页 —— M0 收口第 2 项：「中文 query 命中率」（docs/DESIGN.md）。
  *
- * 为什么必须有这一页：M0 只测了速度，没测质量；而「双塔拆不拆」（交接说明 §9B）
+ * 为什么必须有这一页：M0 只测了速度，没测质量；而「双塔拆不拆」（docs/DESIGN.md）
  * 的真正裁判是检索质量——方案 A（英文单塔）速度最好，但如果中文 query 在它身上
  * 命中率崩掉，就违背了默认模型选型（Chinese-CLIP）的初衷。
  *
@@ -75,7 +75,7 @@ function median(values: number[]): number {
   return Math.round(sorted[Math.floor(sorted.length / 2)] ?? 0)
 }
 
-/** 暴力余弦 top-k：§7.1 自实现向量检索的那一层（与 query.ts 相同的实现） */
+/** 暴力余弦 top-k：docs/DESIGN.md 自实现向量检索的那一层（与 query.ts 相同的实现） */
 function topK(
   matrix: Float32Array,
   query: Float32Array,
@@ -118,8 +118,8 @@ function summarize(outcomes: readonly QueryOutcome[]): LangMetrics {
 }
 
 async function main(): Promise<void> {
-  // 图库与 query 集可换：默认 39 张样例 / 23 条 query（M0 §7），
-  // `?gallery=bench/corpus&queries=corpus` 切到 783 张 / 106 条真实语料（M0 §9.9/§9.10 的口径）。
+  // 图库与 query 集可换：默认 39 张样例 / 23 条 query（M0 docs/BENCHMARKS.md），
+  // `?gallery=bench/corpus&queries=corpus` 切到 783 张 / 106 条真实语料（M0 docs/BENCHMARKS.md 的口径）。
   // 小样例库的「R@1 100%」分不出 100% 与 87%，做决策必须用大图库。
   const GALLERY = params.get('gallery') || ''
   const QUERY_SET = params.get('queries') || 'samples'

@@ -1,11 +1,11 @@
 /**
- * M0 探针 —— 一次性回答 §九 第 1/2/3 项里所有「只能靠实测」的未知。
+ * M0 探针 —— 一次性回答 docs/BENCHMARKS.md 第 1/2/3 项里所有「只能靠实测」的未知。
  *
  * 要回答的问题（每一条都对应一个会改变计划的判断）：
  * 1. 显式 dtype 下 transformers.js 到底请求哪些文件、多少字节、耗时多少（第 1 项）
  * 2. Chinese-CLIP 是单文件双塔模型：单会话能否只算图像侧？还是每次都要跑两个塔（第 2 项）
  * 3. 热会话单张向量化延迟是否 ≤ 150 ms（第 2 项，决定后续所有数字）
- * 4. 无头/软件 WebGPU 适配器必须能被识别出来，否则性能数字是假的（§5.2）
+ * 4. 无头/软件 WebGPU 适配器必须能被识别出来，否则性能数字是假的
  * 5. `createImageBitmap` 能否解开 HEIC（第 3 项）
  *
  * 结果同时写入 `window.__PROBE_RESULT` 与 `#out`，由 Playwright / 浏览器工具抓取。
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
   await maybeStep('webgpu-adapter', async () => {
     const adapter = (await navigator.gpu?.requestAdapter()) ?? null
     // adapter.info 在托管 Chromium 里是空的，因此再用 WebGL 的渲染器名做一次兜底判定：
-    // 出现 SwiftShader / llvmpipe 就说明是软件光栅化，性能数字不可用于验收（§5.2）
+    // 出现 SwiftShader / llvmpipe 就说明是软件光栅化，性能数字不可用于验收
     const canvas = document.createElement('canvas')
     const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
     const debugInfo = gl?.getExtension('WEBGL_debug_renderer_info') ?? null

@@ -1,5 +1,5 @@
 /**
- * `PhotoSource` 的 OPFS 实现（§7.5 的第二个实现）。
+ * `PhotoSource` 的 OPFS 实现（docs/DESIGN.md 的第二个实现）。
  *
  * 为什么必须有它：原生目录选择器 `showDirectoryPicker` 无法被自动化驱动，
  * 因此「端到端测试」与「可复现基准」都只能跑在 OPFS 合成根上。

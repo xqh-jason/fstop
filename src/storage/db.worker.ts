@@ -1,5 +1,5 @@
 /**
- * 数据库 Worker —— `opfs-sahpool` VFS，**单实例**（§7.3）。
+ * 数据库 Worker —— `opfs-sahpool` VFS，**单实例**。
  *
  * 选 `opfs-sahpool` 换来「任何静态托管都能部署」（不需要 COOP/COEP 响应头），
  * 代价是：同一 origin 的第二个实例会初始化失败，且不支持多连接。
@@ -43,7 +43,7 @@ export interface PhotoWrite {
 }
 
 export interface DbOpenOptions {
-  /** VFS 的 OPFS 目录名。不同目录 = 不同实例，可用于隔离测试（§7.3） */
+  /** VFS 的 OPFS 目录名。不同目录 = 不同实例，可用于隔离测试 */
   readonly directory?: string
 }
 
@@ -56,7 +56,7 @@ export interface DbService {
     applied: number
     rootId: number
   }>
-  /** 一次 16–32 张，摊薄 postMessage 开销（§7.7） */
+  /** 一次 16–32 张，摊薄 postMessage 开销 */
   writeBatch(rows: readonly PhotoWrite[]): Promise<void>
   stats(): Promise<{ photos: number; embeddings: number; jobs: number }>
 

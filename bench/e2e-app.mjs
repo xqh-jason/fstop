@@ -6,7 +6,7 @@
  * 原生目录选择器 `showDirectoryPicker` 无法被自动化驱动，所以走 `?root=opfs` 的合成根——
  * 与基准同一条通路，扫描/解码/嵌入/入库的代码路径完全一致。
  *
- * 顺带把「运行时零外发」的断言从基准页扩展到**产品页**（计划 §11.4）：
+ * 顺带把「运行时零外发」的断言从基准页扩展到**产品页**（docs/DESIGN.md）：
  * 除模型 origin 外任何请求都点名并让进程非零退出。
  */
 
@@ -332,7 +332,7 @@ async function main() {
     )
     check('除模型 origin 外零请求', offenders.length === 0, offenders.join(', ') || '无')
     if (modelHits.length > 0) {
-      // 冷缓存首访会去 HuggingFace 取权重：这是唯一允许的外部 origin（计划 §11.4）
+      // 冷缓存首访会去 HuggingFace 取权重：这是唯一允许的外部 origin（docs/DESIGN.md）
       console.log(`  模型 origin：${modelHits.join(', ')}（冷缓存时才会出现）`)
     }
     check('没有页面未捕获异常', pageErrors.length === 0, pageErrors[0] ?? '无')

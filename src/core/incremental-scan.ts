@@ -1,5 +1,5 @@
 /**
- * 增量识别 —— `src/core/` 手写区（项目计划 §7.6 第 3/4 条）。
+ * 增量识别 —— `src/core/` 手写区（docs/DESIGN.md）。
  *
  * **照片身份是内容，不是路径、也不是 `mtime + size`**。计划里点名了两种会毁掉索引的常见情况：
  * 从备份恢复、跨盘复制会让 `mtime` 全变；重命名目录只改 `rel_path`。
@@ -72,7 +72,7 @@ export interface ScanPlan {
   readonly deleted: readonly number[]
 }
 
-/** 首尾各取多少字节参与内容哈希（计划 §7.6 第 3 条） */
+/** 首尾各取多少字节参与内容哈希（docs/DESIGN.md） */
 export const FINGERPRINT_BYTES = 64 * 1024
 
 /**

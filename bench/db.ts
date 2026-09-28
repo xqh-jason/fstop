@@ -1,7 +1,7 @@
 /**
  * 第 5 项专用页：`opfs-sahpool` 的多标签页行为。
  *
- * 要回答的问题（§7.3 的代价面）：同一 origin 的第二个标签页能不能优雅退化，
+ * 要回答的问题（docs/DESIGN.md 的代价面）：同一 origin 的第二个标签页能不能优雅退化，
  * 还是直接抛错？以及用 Web Locks 选主能不能把「抛错」变成「明确的只读/提示」。
  *
  * URL 参数：`?vfs=<目录名>&locks=1`（locks=1 时先抢 Web Lock 再开库）。
@@ -49,7 +49,7 @@ async function openDatabase(): Promise<void> {
 }
 
 if (useLocks) {
-  // 选主：拿不到锁的标签页不初始化 VFS，退化为只读视图（§7.3 的方案）
+  // 选主：拿不到锁的标签页不初始化 VFS，退化为只读视图（docs/DESIGN.md 的方案）
   void navigator.locks.request('fstop-db-leader', { ifAvailable: true }, async (lock) => {
     report.leader = lock !== null
     render()

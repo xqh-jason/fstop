@@ -8,7 +8,7 @@
 
 /**
  * 认的扩展名。**含 HEIC/HEIF**：iPhone 默认格式，家庭库里最高频。
- * M0 已实测 Chrome 能 `createImageBitmap` 解开（实测记录 §9.x），所以收进来；
+ * M0 已实测 Chrome 能 `createImageBitmap` 解开（docs/BENCHMARKS.md），所以收进来；
  * 解不开的文件由解码路径抛错、由状态机记为 `skipped`（**不是失败**），不影响其它照片。
  */
 export const PHOTO_EXTENSIONS: readonly string[] = [

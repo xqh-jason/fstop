@@ -1,5 +1,5 @@
 /**
- * 检索延迟页 —— 补测项目计划 §八 的「语义检索响应（1 万张）≤ 300 ms」。
+ * 检索延迟页 —— 补测docs/DESIGN.md 预算 的「语义检索响应（1 万张）≤ 300 ms」。
  *
  * 这一项 M0 起初没测，但它和双塔问题直接相关：**文本 query 也会把视觉塔白算一遍**，
  * 所以「查询延迟」很可能比索引延迟更早撞线。
@@ -62,7 +62,7 @@ function syntheticIndex(count: number, dim: number): Float32Array {
   return matrix
 }
 
-/** 暴力余弦 top-k：§7.1 自实现向量检索的那一层 */
+/** 暴力余弦 top-k：docs/DESIGN.md 自实现向量检索的那一层 */
 function topK(
   matrix: Float32Array,
   query: Float32Array,

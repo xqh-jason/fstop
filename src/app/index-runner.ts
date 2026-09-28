@@ -3,7 +3,7 @@
  *
  * 这一层刻意只做编排：判断在 `core/incremental-scan.ts`，写库在 `core/scan-apply.ts`，
  * 任务状态机在 `core/index-queue.ts`。于是「进度」不是内存里的计数器，而是**随时可以从库里查出来**的
- * ——这正是「不允许存在内存态的隐式进度」（计划 §7.6）的意思：进程被杀掉，重启后
+ * ——这正是「不允许存在内存态的隐式进度」（docs/DESIGN.md）的意思：进程被杀掉，重启后
  * `requeueRunning` + 重新 `claimJobs` 就能接着算，不需要任何游标。
  */
 
@@ -53,7 +53,7 @@ export interface IndexRunnerOptions {
   readonly dim: number
   readonly onProgress?: (progress: IndexProgress) => void
   readonly signal?: AbortSignal
-  /** 一次领多少任务（§7.7：16–32 摊薄 postMessage 开销） */
+  /** 一次领多少任务（docs/DESIGN.md：16–32 摊薄 postMessage 开销） */
   readonly batchSize?: number
   /**
    * 同时在飞的照片数（默认 3）。单张耗时几乎全在解码 + 嵌入两段计算上，串行时 GPU/CPU 互相空转；
@@ -159,7 +159,7 @@ export async function runIndex(options: IndexRunnerOptions): Promise<IndexRunRes
 
     // 只记「这轮处理了多少张」；failed/skipped 一律以库里的计数为准（不存内存态进度）
     let processed = 0
-    // GPU 只有一个会话：并发提交只会互相排队（§7.4），所以串行
+    // GPU 只有一个会话：并发提交只会互相排队，所以串行
     for (;;) {
       if (options.signal?.aborted === true) {
         update({ phase: 'cancelled' })

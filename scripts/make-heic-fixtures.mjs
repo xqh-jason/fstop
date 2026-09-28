@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * HEIC / HEIF 夹具 —— 服务 §九 M0 第 3 项（HEIC 能否 `createImageBitmap` 解开）。
+ * HEIC / HEIF 夹具 —— 服务 docs/BENCHMARKS.md M0 第 3 项（HEIC 能否 `createImageBitmap` 解开）。
  *
  * 两类夹具，用途不同，不要混：
  * 1. `bench/fixtures/*.heic`：用 `sips` 从样例 JPEG 转出来的「教科书 HEIC」。

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `pnpm bench` 的驱动器 —— 见项目计划 §九 M0 交付物 1：
+ * `pnpm bench` 的驱动器 —— 见 docs/BENCHMARKS.md M0 交付物 1：
  * 「任何人 `pnpm bench` 都能得到 photos/s 并贴进 issue」。
  *
  * 做法：起一个 Vite 服务 → 用 Playwright 打开 `bench/run.html` → 把语料目录塞进
@@ -15,7 +15,7 @@
  *   pnpm bench -- --corpus bench/corpus         # 真实照片语料（目录）
  *   pnpm bench -- --headed --count 200          # 有头 + 限量
  *   pnpm bench -- --model Xenova/clip-vit-base-patch32 --dtype q4f16
- *   pnpm bench -- --query                       # 检索延迟（§八 ≤ 300 ms）
+ *   pnpm bench -- --query                       # 检索延迟（预算 ≤ 300 ms）
  *   pnpm bench -- --quality                     # 检索质量（中文 query 命中率，M0 收口 §A2）
  */
 
@@ -47,13 +47,13 @@ const SOURCE = args.includes('--source')
   : CORPUS === null
     ? 'opfs'
     : 'files'
-/** `--query`：跑检索延迟页（§八 ≤ 300 ms），不建索引 */
+/** `--query`：跑检索延迟页（预算 ≤ 300 ms），不建索引 */
 const QUERY_MODE = args.includes('--query')
-/** `--quality`：跑检索质量页（M0 收口 §9A2 中文 query 命中率），样例库即检索库 */
+/** `--quality`：跑检索质量页（M0 收口 docs/DESIGN.md 中文 query 命中率），样例库即检索库 */
 const QUALITY_MODE = args.includes('--quality')
-/** `--towers`：跑拆塔方案 C spike（§9A3：ORT 指定输出列表是否真能剪掉另一塔） */
+/** `--towers`：跑拆塔方案 C spike（docs/DESIGN.md：ORT 指定输出列表是否真能剪掉另一塔） */
 const TOWERS_MODE = args.includes('--towers')
-/** `--exported`：跑导出塔 spike（§9A5 / D2：图手术切出的单塔成本 + 112² 版的中文 R@1） */
+/** `--exported`：跑导出塔 spike（docs/DESIGN.md / D2：图手术切出的单塔成本 + 112² 版的中文 R@1） */
 const EXPORTED_MODE = args.includes('--exported')
 
 /** @param {string} url @param {number} timeoutMs */
@@ -139,7 +139,7 @@ async function main() {
     context.on('requestfailed', (request) => {
       console.log(`[http failed] ${request.url()} ${request.failure()?.errorText ?? ''}`)
     })
-    // 运行时「零外发」断言：计划 §11.4 要求把承诺变成机器检查，静态扫描（check-egress.mjs）
+    // 运行时「零外发」断言：docs/DESIGN.md 要求把承诺变成机器检查，静态扫描（check-egress.mjs）
     // 看不到依赖内部的请求。
     // 口径按计划原文：「除模型 origin 外零请求」——所以允许模型下载源（冷缓存时权重/分词器
     // 确实要从这里拉），其余任何 host（CDN、遥测、分析）都点名并以非零码退出。

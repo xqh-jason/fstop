@@ -1,9 +1,9 @@
 /**
- * 拆塔方案 C 的 spike —— 交接说明 §9A3（实测记录 §7 判定后的下一步）。
+ * 拆塔方案 C 的 spike —— docs/DESIGN.md（docs/BENCHMARKS.md 判定后的下一步）。
  *
  * 背景：Chinese-CLIP 是单文件双塔。transformers.js 的 `runInferenceSession` 调
  * `session.run(ortFeed)` 时**从不传输出列表**，ORT 于是计算全部输出——每次图像 embedding
- * 都白算文本塔（实测记录 §2：双塔 176 ms vs 单塔 72 ms 的差距即由此来）。
+ * 都白算文本塔（docs/BENCHMARKS.md：双塔 176 ms vs 单塔 72 ms 的差距即由此来）。
  * 方案 C 的赌注：直接拿到底层 ORT session，用 `session.run(feeds, ['image_embeds'])`
  * 指定输出列表，ORT 只执行目标输出所需的子图——**这个假设必须实测，文档不能替我们回答**。
  *
@@ -11,7 +11,7 @@
  * 1. 能否从 transformers.js 模型对象拿到底层 ORT session（`model.sessions`）；
  * 2. 指定输出列表后 ORT 是否真的剪掉另一塔——看耗时，对照全输出 run；
  * 3. 只喂单侧输入 + 指定输出，能否绕过「Missing the following inputs」的图输入校验
- *    （M0 §2 记录过：只喂 pixel_values 会报缺 input_ids）；
+ *    （M0 docs/BENCHMARKS.md 记录过：只喂 pixel_values 会报缺 input_ids）；
  * 4. 剪枝输出与全量输出是否一致（余弦 ≈ 1）。
  *
  * 参数：`?model=&dtype=&runs=10&device=webgpu|wasm`。结果写入 `window.__TOWER_RESULT`。
@@ -68,7 +68,7 @@ function spread(times: number[]): { min: number; median: number; max: number } {
   }
 }
 
-/** 中位数耗时：1 次预热 + RUNS 次采样（M0 §3 的教训——首跑含初始化，不可比） */
+/** 中位数耗时：1 次预热 + RUNS 次采样（M0 docs/BENCHMARKS.md 的教训——首跑含初始化，不可比） */
 async function medianMs(label: string, fn: () => Promise<unknown>, runs: number): Promise<number> {
   await fn()
   const times: number[] = []
@@ -181,7 +181,7 @@ async function main(): Promise<void> {
   }
 
   // 5) 形状扫描：把「视觉塔成本」与「文本塔成本」分开量。
-  //    动机：M0 §2 的「双塔白算 104 ms（占 59%）」是拿 Chinese-CLIP ViT-B/16 与 CLIP ViT-B/32
+  //    动机：M0 docs/BENCHMARKS.md 的「双塔白算 104 ms（占 59%）」是拿 Chinese-CLIP ViT-B/16 与 CLIP ViT-B/32
   //    两个**不同模型**比的——两者视觉塔 token 数差 4×（196 vs 49），那个差值的归因可能整块都错。
   //    在**同一个模型**上变两个自变量：图像边长（改视觉塔 token 数）与文本长度（改文本塔 token 数）。
   //

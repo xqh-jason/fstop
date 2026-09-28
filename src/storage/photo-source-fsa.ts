@@ -1,5 +1,5 @@
 /**
- * `PhotoSource` 的 File System Access 实现（§7.5 的第一个实现，M1）。
+ * `PhotoSource` 的 File System Access 实现（docs/DESIGN.md 的第一个实现，M1）。
  *
  * **只持有句柄，不复制文件**：原图始终留在用户硬盘上（这是产品的核心承诺）。
  *

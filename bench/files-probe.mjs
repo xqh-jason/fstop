@@ -1,7 +1,7 @@
 /**
- * `files` 模式静默失败根因探针 —— M0 实测记录 §8 第 7 项。
+ * `files` 模式静默失败根因探针 —— docs/BENCHMARKS.md 第 7 项。
  *
- * 已知现象（§6）：`setInputFiles` 给 `<input webkitdirectory>` 塞**软链目录**时
+ * 已知现象：`setInputFiles` 给 `<input webkitdirectory>` 塞**软链目录**时
  * `input.files.length` 恒为 0（静默），塞真实目录正常。但根因未钉死：
  * 是 Chromium 枚举时**逐项过滤软链**，还是**整个枚举中断**？硬链呢？混合目录呢？
  * M1 的 Playwright 端到端要复用 files 模式，必须先知道边界在哪。

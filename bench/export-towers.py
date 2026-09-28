@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-拆塔 / 降分辨率导出的 spike 工具 —— 交接说明 §9A5 与 §9B 的 D2。
+拆塔 / 降分辨率导出的 spike 工具 —— docs/DESIGN.md 与 docs/DESIGN.md 的 D2。
 
 背景：`Xenova/chinese-clip-vit-base-patch16` 是单文件双塔，且 ORT 的 WebGPU EP
-**不剪枝**（实测记录 §9.1），所以要真正只算视觉塔，只能从 ONNX 图里**切出子图**。
+**不剪枝**（docs/BENCHMARKS.md），所以要真正只算视觉塔，只能从 ONNX 图里**切出子图**。
 本脚本用 `onnx.utils.extract_model` 做图手术，产出：
 
   vision<size>_q4f16.onnx   pixel_values -> image_embeds（多个分辨率档）
   text_q4f16.onnx           input_ids+attention_mask -> text_embeds
 
-**「分辨率被导出钉死」的完整机制**（实测记录 §9.3 只查到第一道闸）：
+**「分辨率被导出钉死」的完整机制**（docs/BENCHMARKS.md 只查到第一道闸）：
 
 1. 位置编码是常量初始化器 `[1, 197, 768]` —— 输入边长一变，`/vision_model/embeddings/Add`
    就报 `left operand cannot broadcast`；
@@ -18,7 +18,7 @@
 3. 还有第三个更隐蔽的坑：`extract_model` 会把源图的 **667 条 `value_info` 形状注解**
    一起复制出来，注解里写死 197 —— 改完前两块**仍然**报同一个 Add 不兼容，必须清空注解。
 
-三块的完整排查过程见实测记录 §9.5。
+三块的完整排查过程见 docs/BENCHMARKS.md。
 
 派生产物落在 `bench/export/`（已 gitignore，与 `.cache/models` 同一纪律：仓库不分发权重）。
 Python + `onnx` 属于 spike 期的一次性依赖，不是项目运行依赖。
@@ -185,7 +185,7 @@ def sanitize(model: "onnx.ModelProto", label: str) -> dict:
     这一步不是洁癖：`extract_model` 会把**源图**的 `value_info`（实测 667 条）一起复制出来，
     而那批注解里写死的 token 数是 197。ONNX/ORT 的形状推导会把它们当真，
     于是在改过常量的图上直接报 `Add: [ShapeInferenceError] Incompatible dimensions`
-    ——实测就是在这一步卡住，跟位置编码/Reshape 常量都无关（见实测记录 §9.6）。
+    ——实测就是在这一步卡住，跟位置编码/Reshape 常量都无关（见 docs/BENCHMARKS.md）。
     """
     before = len(model.graph.value_info)
     del model.graph.value_info[:]

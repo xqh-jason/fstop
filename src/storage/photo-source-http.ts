@@ -5,7 +5,7 @@
  * 1. **内置样例库**（`public/samples/`）：M3 的「打开即可体验」—— 用户不选目录也能
  *    先跑一遍索引与检索，看清楚这东西是什么；
  * 2. **基准语料**：`showDirectoryPicker` 无法自动化，`<input webkitdirectory>` 实测在
- *    持久化 profile 下会静默失败（`input.files.length` 恒为 0，见实测记录 §8 第 7 项），
+ *    持久化 profile 下会静默失败（`input.files.length` 恒为 0，见 docs/BENCHMARKS.md 第 7 项），
  *    所以基准让页面用 HTTP 读项目根下的语料。
  *
  * ⚠ **这是 `src/` 里第二个允许 `fetch` 的文件**（另一个是 `storage/models.ts`），

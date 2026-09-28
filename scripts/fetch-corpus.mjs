@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 真实照片语料 —— 从 Wikimedia Commons 抓 CC0 / 公有领域**原图**，给 §九 第 4 项当输入。
+ * 真实照片语料 —— 从 Wikimedia Commons 抓 CC0 / 公有领域**原图**，给 docs/BENCHMARKS.md 第 4 项当输入。
  *
  * 为什么需要它：合成语料的 JPEG 只有 ~200 KB（真实相机 12MP 是 3–6 MB），
  * 会把 read 与部分 decode 成本显著低估。真实语料用来校正这个偏差。

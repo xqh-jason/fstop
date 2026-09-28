@@ -69,4 +69,17 @@ pnpm bench -- --model Xenova/clip-vit-base-patch32 --dtype q4f16
 
 ## Design source of truth
 
-`docs/Fstop-光圈-项目计划-v0.2.md` (Chinese) is the design document. If a change contradicts it, update the plan in the same PR rather than letting the two drift.
+Two documents are authoritative, and both are in English:
+
+- [`docs/DESIGN.md`](docs/DESIGN.md) — architecture, the decisions and their alternatives, and the invariants
+  that every change has to keep.
+- [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) — every measured number, with the environment and the command that
+  produced it.
+
+If a change contradicts either one, update the document in the same pull request rather than letting the two
+drift. A number in the README that no longer matches `docs/BENCHMARKS.md` is a bug.
+
+## Conduct and security
+
+Contributions are covered by the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as
+described in [`SECURITY.md`](SECURITY.md) — not as a public issue.
