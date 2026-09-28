@@ -3,5 +3,13 @@
 # protobufjs 的 postinstall 同样不需要。要放行某个包，就在这里列出它。
 onlyBuiltDependencies: []
 
+# 但只有上面那一行还不够：pnpm 11 会把「有构建脚本却被忽略」当成**错误**
+# （`ERR_PNPM_IGNORED_BUILDS` —— CI 从 2026-09-24 起因此一直是红的）。
+# 这两个包本来就不需要跑脚本，所以显式列出，并让这类情况只警告、不阻塞安装。
+ignoredBuiltDependencies:
+  - onnxruntime-node
+  - protobufjs
+strictDepBuilds: false
+
 minimumReleaseAgeExclude:
   - prettier@3.9.9
