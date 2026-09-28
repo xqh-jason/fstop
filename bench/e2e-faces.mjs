@@ -190,9 +190,10 @@ check(
 )
 
 // ——— 3.5 封面/人脸格子必须真的画出人脸 ———
-// 这一节盯的是两处「数据都对、画面全错」的翻车：
+// 这一节盯的是三处「数据都对、画面全错」的翻车：
 // ① 缩略图表被检索结果整体替换 → 人脸格子连 <img> 都没有，面板一片空白；
-// ② 按原图像素算放大倍数、却作用在 320 px 缩略图上 → 放大过头，格子只剩一片纯色。
+// ② 按原图像素算放大倍数、却作用在 320 px 缩略图上 → 放大过头，格子只剩一片纯色；
+// ③ 只按左上角对齐、漏了照片高宽比 → 裁切窗口偏出人脸，用户只看到「照片一角」。
 const covers = await page.evaluate(async () => {
   const report = []
   for (const cell of [...document.querySelectorAll('.face-crop')].slice(0, 8)) {
@@ -206,22 +207,30 @@ const covers = await page.evaluate(async () => {
     await img.decode().catch(() => null)
     const naturalWidth = img.naturalWidth
     const naturalHeight = img.naturalHeight
-    const cropW = Math.max(1, Math.round(num('--wr') * naturalWidth))
-    const cropH = Math.max(1, Math.round(num('--hr') * naturalHeight))
+    // 裁切窗口按页面自己的变量算回来：人脸长边 = 格子宽 × 1，中心在 (fx, fy) 个人脸长边处
+    const cellWidth = cell.offsetWidth
+    const faceSpan = cellWidth
     const cropX = Math.max(
       0,
-      Math.min(naturalWidth - cropW, Math.round(num('--xr') * naturalWidth)),
+      Math.min(
+        naturalWidth - 1,
+        Math.round((num('--fx') * faceSpan) / (img.offsetWidth / naturalWidth)),
+      ),
     )
     const cropY = Math.max(
       0,
-      Math.min(naturalHeight - cropH, Math.round(num('--yr') * naturalHeight)),
+      Math.min(
+        naturalHeight - 1,
+        Math.round((num('--fy') * faceSpan) / (img.offsetHeight / naturalHeight)),
+      ),
     )
+    const cropSide = Math.max(1, Math.round(faceSpan / (img.offsetWidth / naturalWidth)))
     const canvas = document.createElement('canvas')
-    canvas.width = cropW
-    canvas.height = cropH
+    canvas.width = cropSide
+    canvas.height = cropSide
     const ctx = canvas.getContext('2d')
-    ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH)
-    const data = ctx.getImageData(0, 0, cropW, cropH).data
+    ctx.drawImage(img, cropX, cropY, cropSide, cropSide, 0, 0, cropSide, cropSide)
+    const data = ctx.getImageData(0, 0, cropSide, cropSide).data
     let sum = 0
     let sumSq = 0
     let count = 0
@@ -232,14 +241,25 @@ const covers = await page.evaluate(async () => {
       count += 1
     }
     const mean = sum / count
-    const k = num('--k')
+    const sw = num('--sw')
     report.push({
       hasImg: true,
       natural: naturalWidth,
       naturalH: naturalHeight,
+      cellW: cellWidth,
       renderedW: img.offsetWidth,
       renderedH: img.offsetHeight,
-      expectedW: k > 0 ? 64 / k : 0,
+      sw,
+      expectedW: cellWidth * sw,
+      fx: num('--fx'),
+      fy: num('--fy'),
+      // 两边的「中心」都换算到**图片自己的坐标系**里比：
+      // - 可见窗口的中心 = 图片左上角被推到 (-left, -top) 之后再加半个格子
+      // - 人脸中心：fx/fy 以「人脸长边」为单位，而人脸长边在屏幕上正好占一个格子宽
+      faceCenterX: num('--fx') * cellWidth,
+      faceCenterY: num('--fy') * cellWidth,
+      windowCenterX: -Number.parseFloat(getComputedStyle(img).left) + cellWidth / 2,
+      windowCenterY: -Number.parseFloat(getComputedStyle(img).top) + cell.offsetHeight / 2,
       stddev: Math.sqrt(Math.max(0, sumSq / count - mean * mean)),
     })
   }
@@ -261,6 +281,25 @@ check(
   covers
     .map((cell) => `${String(cell.renderedW)}≈${String(Math.round(cell.expectedW ?? 0))}`)
     .join(' '),
+)
+check(
+  '可见窗口对准人脸中心（别裁到只剩一角）',
+  covers.every(
+    (cell) =>
+      Math.abs((cell.windowCenterX ?? 99) - (cell.faceCenterX ?? 0)) <= 2 &&
+      Math.abs((cell.windowCenterY ?? 99) - (cell.faceCenterY ?? 0)) <= 2,
+  ),
+  covers
+    .map(
+      (cell) =>
+        `Δ(${((cell.windowCenterX ?? 0) - (cell.faceCenterX ?? 0)).toFixed(1)},${((cell.windowCenterY ?? 0) - (cell.faceCenterY ?? 0)).toFixed(1)})`,
+    )
+    .join(' '),
+)
+check(
+  '人脸格子够大（≥100px，实测反馈 64px 看不清是谁）',
+  covers.every((cell) => (cell.cellW ?? 0) >= 100),
+  covers.map((cell) => String(cell.cellW)).join(' '),
 )
 check(
   '缩略图没被拉伸变形（保持原始宽高比）',

@@ -779,9 +779,11 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
 
 <style scoped>
 .shell {
-  max-width: 46rem;
+  /* 铺满宽度：46rem 会把照片墙和人物面板都挤成一列（实测反馈「展示太小」）。
+     上限留给超宽屏，笔记本/普通显示器上就是整宽 + 内边距。 */
+  max-width: 108rem;
   margin: 0 auto;
-  padding: 4rem 1.5rem 6rem;
+  padding: 3rem 2rem 6rem;
   display: flex;
   flex-direction: column;
   gap: 2rem;

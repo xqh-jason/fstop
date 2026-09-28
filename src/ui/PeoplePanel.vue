@@ -124,32 +124,34 @@ async function split(cluster: ClusterRow): Promise<void> {
 }
 
 /**
- * 缩略图里按人脸框定位：把整张缩略图放大到只露出人脸那一块。
+ * 缩略图里按人脸框定位：把整张缩略图放大到「人脸较长的那条边正好铺满格子」，
+ * 并让人脸**中心对准格子中心**。
  *
- * **全部用无单位比例，交给 CSS calc 去乘容器尺寸**（实测踩过的坑）：早先这里是
- * 「原图像素 × 放大倍数」的绝对 px（`width: ${原图宽 × 倍数}px`），倍数按原图算、却作用在
- * **320 px 的缩略图**上 —— 倍数大了约 12.5 倍，64 px 的格子只看到脸上一小块皮肤，
- * 显示出来是一片纯色。比例与容器无关，算式里就不该出现绝对像素。
+ * 全部用无单位比例，交给 CSS `calc` 去乘容器尺寸与图片自身尺寸 —— 算式里不出现
+ * 绝对像素、也不出现照片/缩略图的具体分辨率，换任何尺寸的图都对。
  *
- * - `--k`：人脸框相对尺寸里较大的那个（宽/高各占原图的比例），决定放大到「哪条边贴住格子」
- * - `--wr/--hr/--xr/--yr`：人脸框的宽/高/左边/上边占原图的比例
- * - `--ar`：原图高/宽，用来把「图片高度」换算成以格子高度为单位（格子是方的，两边同尺度）
+ * 三个变量（都以「人脸较长边」为 1 个单位）：
+ * - `--sw`：整张照片的宽 = 多少个人脸长边 → `width: 100% * var(--sw)` 就把脸放大到铺满格子
+ * - `--fx/--fy`：人脸**中心**在照片里的位置（同样的单位）→ 用 `50% - 100% * fx` 把中心对到格子中心
+ *
+ * 踩过的两个坑（都实测过，别再写回去）：
+ * ① 用**原图像素**算放大倍数、却作用在 320 px 缩略图上 → 多放大十几倍，格子只剩一块皮肤（纯色）；
+ * ② 只对齐人脸左上角、不加高宽比因子 → 平移到「额头+眼睛」，用户看到的就是「照片一角」。
+ *    正确做法是对齐**中心**：对齐左上角必须同时知道脸的宽高占格子的比例，而中心不需要。
  */
 function faceStyle(face: FaceRow): Record<string, string> {
   const width = face.width ?? 0
   const height = face.height ?? 0
   const boxWidth = face.x2 - face.x1
   const boxHeight = face.y2 - face.y1
+  // 尺寸缺失时不给变量：CSS 的默认值（整宽、居中）会退化成「按宽铺满、居中裁切」，
+  // 至少还是等比缩放，而不是把图片按原始像素摆在格子里只露一角。
   if (width <= 0 || height <= 0 || boxWidth <= 0 || boxHeight <= 0) return {}
-  const wr = boxWidth / width
-  const hr = boxHeight / height
+  const span = Math.max(boxWidth, boxHeight)
   return {
-    '--k': String(Math.max(wr, hr)),
-    '--wr': String(wr),
-    '--hr': String(hr),
-    '--xr': String(face.x1 / width),
-    '--yr': String(face.y1 / height),
-    '--ar': String(height / width),
+    '--sw': String(width / span),
+    '--fx': String((face.x1 + boxWidth / 2) / span),
+    '--fy': String((face.y1 + boxHeight / 2) / span),
   }
 }
 
@@ -191,6 +193,7 @@ function nameOf(cluster: ClusterRow): string {
           v-for="cluster in clusters"
           :key="cluster.clusterId"
           class="person"
+          :class="{ 'person--open': openClusterId === cluster.clusterId }"
           :data-cluster-id="cluster.clusterId"
           :data-name="nameOf(cluster)"
           :data-members="
@@ -342,6 +345,14 @@ function nameOf(cluster: ClusterRow): string {
   gap: 0.75rem;
 }
 
+/*
+ * 人脸格子的尺寸。用户实测反馈：64px 太小，看不清是谁。
+ * 下限写死 100px（窄屏也不许小于它），宽屏随视口放大到 152px。
+ */
+.people {
+  --face-size: clamp(100px, 8.5vw, 152px);
+}
+
 .people__status {
   font-size: 0.8125rem;
   color: var(--text-dim);
@@ -360,7 +371,15 @@ function nameOf(cluster: ClusterRow): string {
   margin: 0.75rem 0 0;
   padding: 0;
   display: grid;
-  gap: 0.5rem;
+  /* 铺满宽度：宽屏一行能放下几组就放几组，窄屏自动回落到一列 */
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+
+/* 展开的那一组横跨整行：人脸格子才有地方铺开 */
+.person--open {
+  grid-column: 1 / -1;
 }
 
 .person {
@@ -381,6 +400,13 @@ function nameOf(cluster: ClusterRow): string {
   background: none;
   padding: 0;
   cursor: pointer;
+  line-height: 0;
+}
+
+/* 封面是这一组的「门面」，比成员脸再大一档 */
+.person__cover .face-crop {
+  width: calc(var(--face-size) * 1.25);
+  height: calc(var(--face-size) * 1.25);
 }
 
 .person__meta {
@@ -391,11 +417,11 @@ function nameOf(cluster: ClusterRow): string {
 }
 
 .person__name {
-  font-size: 0.9375rem;
+  font-size: 1.125rem;
 }
 
 .person__count {
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   color: var(--text-dim);
 }
 
@@ -413,9 +439,10 @@ function nameOf(cluster: ClusterRow): string {
 }
 
 .person__faces {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  display: grid;
+  /* 每格正好一个人脸尺寸，多余空间留在右侧，别把脸拉变形 */
+  grid-template-columns: repeat(auto-fill, var(--face-size));
+  gap: 0.6rem;
 }
 
 .face,
@@ -432,7 +459,7 @@ function nameOf(cluster: ClusterRow): string {
   background: none;
   padding: 0;
   cursor: pointer;
-  width: 64px;
+  width: var(--face-size);
 }
 
 .face[data-selected='true'] {
@@ -444,32 +471,29 @@ function nameOf(cluster: ClusterRow): string {
 }
 
 .face-crop {
-  width: 64px;
-  height: 64px;
+  width: var(--face-size);
+  height: var(--face-size);
   background: var(--border);
 }
 
 .face-crop img {
   position: absolute;
   max-width: none;
-  /* 让人脸框正好铺满格子，多出来的方向居中（全部用比例算，与容器尺寸无关） */
-  width: calc(100% / var(--k, 1));
+  /* 等比放大到「人脸长边铺满格子」，并把人脸中心对准格子中心（全用比例，与容器尺寸无关） */
+  width: calc(100% * var(--sw, 1));
   height: auto;
-  left: calc(-100% * var(--xr, 0) / var(--k, 1) + (100% - 100% * var(--wr, 1) / var(--k, 1)) / 2);
-  top: calc(
-    -100% * var(--yr, 0) / var(--k, 1) * var(--ar, 1) + (100% - 100% * var(--hr, 1) / var(--k, 1)) /
-      2
-  );
+  left: calc(50% - 100% * var(--fx, 0.5));
+  top: calc(50% - 100% * var(--fy, 0.5));
 }
 
 .face__path {
   display: block;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 64px;
+  max-width: var(--face-size);
 }
 
 .people__ungrouped {

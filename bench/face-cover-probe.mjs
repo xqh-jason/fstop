@@ -20,6 +20,11 @@ const PROFILE = path.resolve('.cache', 'bench-profile')
 const context = await chromium.launchPersistentContext(PROFILE, {
   channel: 'chrome',
   headless: true,
+  // 用笔记本真实视口量尺寸：面板宽度与格子大小都受它影响
+  viewport: {
+    width: Number(process.env.PROBE_VW ?? 1512),
+    height: Number(process.env.PROBE_VH ?? 982),
+  },
 })
 const page = context.pages()[0] ?? (await context.newPage())
 
@@ -110,23 +115,27 @@ try {
       }
       const style = getComputedStyle(cell)
       const num = (name) => Number.parseFloat(style.getPropertyValue(name))
-      const wr = num('--wr')
-      const hr = num('--hr')
-      const xr = num('--xr')
-      const yr = num('--yr')
       await img.decode().catch(() => null)
-      const naturalW = img.naturalWidth
-      const naturalH = img.naturalHeight
-      const cropW = Math.max(1, Math.round(wr * naturalW))
-      const cropH = Math.max(1, Math.round(hr * naturalH))
-      const cropX = Math.max(0, Math.min(naturalW - cropW, Math.round(xr * naturalW)))
-      const cropY = Math.max(0, Math.min(naturalH - cropH, Math.round(yr * naturalH)))
+      const naturalWidth = img.naturalWidth
+      const naturalHeight = img.naturalHeight
+      // 与页面同一套变量换算：人脸长边 = 格子宽，人脸中心在 (fx, fy) 个人脸长边处
+      const cellWidth = cell.offsetWidth
+      const scale = img.offsetWidth / naturalWidth
+      const side = Math.max(1, Math.round(cellWidth / scale))
+      const cropX = Math.max(
+        0,
+        Math.min(naturalWidth - side, Math.round((num('--fx') * cellWidth) / scale - side / 2)),
+      )
+      const cropY = Math.max(
+        0,
+        Math.min(naturalHeight - side, Math.round((num('--fy') * cellWidth) / scale - side / 2)),
+      )
       const canvas = document.createElement('canvas')
-      canvas.width = cropW
-      canvas.height = cropH
+      canvas.width = side
+      canvas.height = side
       const ctx = canvas.getContext('2d')
-      ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH)
-      const data = ctx.getImageData(0, 0, cropW, cropH).data
+      ctx.drawImage(img, cropX, cropY, side, side, 0, 0, side, side)
+      const data = ctx.getImageData(0, 0, side, side).data
       let sum = 0
       let sumSq = 0
       let count = 0
@@ -137,11 +146,15 @@ try {
         count += 1
       }
       const mean = sum / count
+      const left = Number.parseFloat(style.left ?? '0') || 0
+      void left
       out.push({
-        k: Number(num('--k').toFixed(4)),
-        crop: `${cropW}×${cropH} @ ${cropX},${cropY}`,
-        renderedW: img.offsetWidth,
-        expectedW: Math.round(64 / num('--k')),
+        cell: cellWidth,
+        imgW: img.offsetWidth,
+        sw: Number(num('--sw').toFixed(3)),
+        fx: Number(num('--fx').toFixed(3)),
+        fy: Number(num('--fy').toFixed(3)),
+        crop: `${side}×${side} @ ${cropX},${cropY}`,
         mean: Number(mean.toFixed(1)),
         stddev: Number(Math.sqrt(Math.max(0, sumSq / count - mean * mean)).toFixed(2)),
       })
