@@ -2,6 +2,10 @@ import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  // 部署在子路径下时要能覆盖（GitHub Pages 项目站是 `/<repo>/`）：
+  //   VITE_BASE=/fstop/ pnpm build
+  // 本机开发与端到端脚本保持默认 `/`。
+  base: process.env.VITE_BASE ?? '/',
   plugins: [vue()],
   test: {
     environment: 'node',

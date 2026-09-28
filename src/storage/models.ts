@@ -191,8 +191,13 @@ export const FACE_RECOGNIZER: FaceRecognizerSpec = {
 // → 一律**不进仓库**（见 NOTICE §1）。所以这里是「探测本地是否已生成」，
 // 探测不到就回落到原生双塔路径——没跑过生成脚本的用户照样能用，只是慢一些。
 
-/** 派生产物的默认目录（`public/models/derived/`，已 gitignore，由生成脚本写入） */
-export const DERIVED_MODEL_BASE = '/models/derived'
+/**
+ * 派生权重目录（`public/models/derived/`，已 gitignore，由生成脚本写入；见 `docs/DESIGN.md`）。
+ *
+ * 跟着构建 base 走：部署在子路径下时写死 `/models/...` 会探测失败，
+ * 而探不到派生权重只会退化为原版双塔（更慢但不报错），属于最难察觉的一类回归。
+ */
+export const DERIVED_MODEL_BASE = `${import.meta.env.BASE_URL}models/derived`
 
 export interface DerivedTowerFile {
   readonly file: string

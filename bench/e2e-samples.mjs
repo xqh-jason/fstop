@@ -20,7 +20,9 @@ import path from 'node:path'
 
 const DIST = path.resolve(process.env.E2E_DIST ?? 'dist')
 const PORT = Number(process.env.E2E_PORT ?? 5190)
-const BASE = `http://127.0.0.1:${PORT}`
+// 挂载前缀：用来验证「部署在子路径下」的形态（GitHub Pages 的项目站就是 /<repo>/）
+const BASE_PATH = (process.env.E2E_BASE_PATH ?? '/').replace(/\/*$/, '/')
+const BASE = `http://127.0.0.1:${PORT}${BASE_PATH}`
 /**
  * 样例库张数**从清单读**，不写死：写死过一次 40（真实是 39，`ls | wc -l` 把 manifest.json
  * 也算进去了），结果端到端红在一句「39/40」上 —— 断言数字写死就会这样烂掉。
@@ -48,8 +50,15 @@ const MIME = {
 /** 极简静态服务器：只服务 dist/，等价于「把纯静态产物部署到任何静态托管」 */
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', BASE)
-  const rel =
-    decodeURIComponent(url.pathname) === '/' ? '/index.html' : decodeURIComponent(url.pathname)
+  const pathname = decodeURIComponent(url.pathname)
+  // 前缀之外的路径一律 404 —— 真实的子路径托管也是这个行为
+  if (!pathname.startsWith(BASE_PATH)) {
+    response.writeHead(404)
+    response.end('not found')
+    return
+  }
+  const mounted = pathname.slice(BASE_PATH.length)
+  const rel = mounted === '' ? '/index.html' : `/${mounted}`
   const file = path.join(DIST, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''))
   readFile(file)
     .then((buffer) => {

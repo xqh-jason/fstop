@@ -1,0 +1,69 @@
+# 把构建产物发布到 GitHub Pages。
+#
+# 前置（一次性，在仓库 Settings → Pages 里，或用 gh api 设置）：
+#   Source = GitHub Actions
+#
+# 注意：
+#   1. 项目站地址是 https://<user>.github.io/<repo>/ —— 所以构建要带 base 前缀，
+#      否则资源会去根路径找（应用里写死的 `/samples`、`/models/derived` 已改为跟 BASE_URL 走）。
+#   2. `public/models/derived/` 是**本机生成**的派生权重（上游模型卡未授权再分发），
+#      这里显式删掉并在还有 `.onnx` 时直接失败；应用会自动回落到原版双塔（更慢，但能用）。
+#   3. Pages 免费版只支持**公开仓库**；私有仓库要 Pro。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build (sub-path base for the project site)
+        run: pnpm build
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+
+      - name: Strip derived model weights and fail if any .onnx survives
+        run: |
+          rm -rf dist/models/derived
+          if find dist -iname '*.onnx' | grep -q .; then
+            echo "::error::发布物里出现 .onnx（派生权重不得再分发）"
+            find dist -iname '*.onnx'
+            exit 1
+          fi
+          du -sh dist
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

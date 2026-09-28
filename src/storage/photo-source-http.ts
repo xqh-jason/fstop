@@ -58,13 +58,20 @@ export class HttpPhotoSource implements PhotoSource {
     return new HttpPhotoSource(rootId, baseUrl, basePath, entries)
   }
 
-  /** 内置样例库（M3「打开即可体验」）：`public/samples/manifest.json` */
+  /**
+   * 内置样例库（M3「打开即可体验」）：`public/samples/manifest.json`。
+   *
+   * 路径**必须跟着构建 base 走**（`import.meta.env.BASE_URL`）：部署在子路径下
+   * （GitHub Pages 的项目站是 `https://<user>.github.io/<repo>/`）时，
+   * 写死 `/samples` 会 404 —— 而本机根路径下一切正常，属于「只有部署才暴露」的那类 bug。
+   */
   static async openBundledSamples(
     rootId: string,
     baseUrl: string,
     limit = 0,
   ): Promise<HttpPhotoSource> {
-    return await HttpPhotoSource.open(rootId, baseUrl, limit, 'samples')
+    const basePath = `${import.meta.env.BASE_URL}samples`.replace(/^\/+/, '')
+    return await HttpPhotoSource.open(rootId, baseUrl, limit, basePath)
   }
 
   get count(): number {
