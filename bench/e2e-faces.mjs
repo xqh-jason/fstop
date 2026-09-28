@@ -189,6 +189,95 @@ check(
   JSON.stringify(panel.clusters.map((cluster) => cluster.count)),
 )
 
+// ——— 3.5 封面/人脸格子必须真的画出人脸 ———
+// 这一节盯的是两处「数据都对、画面全错」的翻车：
+// ① 缩略图表被检索结果整体替换 → 人脸格子连 <img> 都没有，面板一片空白；
+// ② 按原图像素算放大倍数、却作用在 320 px 缩略图上 → 放大过头，格子只剩一片纯色。
+const covers = await page.evaluate(async () => {
+  const report = []
+  for (const cell of [...document.querySelectorAll('.face-crop')].slice(0, 8)) {
+    const img = cell.querySelector('img')
+    if (img === null) {
+      report.push({ hasImg: false })
+      continue
+    }
+    const style = getComputedStyle(cell)
+    const num = (name) => Number.parseFloat(style.getPropertyValue(name))
+    await img.decode().catch(() => null)
+    const naturalWidth = img.naturalWidth
+    const naturalHeight = img.naturalHeight
+    const cropW = Math.max(1, Math.round(num('--wr') * naturalWidth))
+    const cropH = Math.max(1, Math.round(num('--hr') * naturalHeight))
+    const cropX = Math.max(
+      0,
+      Math.min(naturalWidth - cropW, Math.round(num('--xr') * naturalWidth)),
+    )
+    const cropY = Math.max(
+      0,
+      Math.min(naturalHeight - cropH, Math.round(num('--yr') * naturalHeight)),
+    )
+    const canvas = document.createElement('canvas')
+    canvas.width = cropW
+    canvas.height = cropH
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH)
+    const data = ctx.getImageData(0, 0, cropW, cropH).data
+    let sum = 0
+    let sumSq = 0
+    let count = 0
+    for (let i = 0; i < data.length; i += 4) {
+      const lum = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]
+      sum += lum
+      sumSq += lum * lum
+      count += 1
+    }
+    const mean = sum / count
+    const k = num('--k')
+    report.push({
+      hasImg: true,
+      natural: naturalWidth,
+      naturalH: naturalHeight,
+      renderedW: img.offsetWidth,
+      renderedH: img.offsetHeight,
+      expectedW: k > 0 ? 64 / k : 0,
+      stddev: Math.sqrt(Math.max(0, sumSq / count - mean * mean)),
+    })
+  }
+  return report
+})
+check(
+  '封面/人脸格子都渲染出 <img>',
+  covers.length > 0 && covers.every((cell) => cell.hasImg),
+  `${String(covers.filter((cell) => cell.hasImg).length)}/${String(covers.length)} 个格子有图`,
+)
+check(
+  '缩略图有真实像素',
+  covers.every((cell) => (cell.natural ?? 0) > 0),
+  `natural=${String(covers[0]?.natural ?? 0)}`,
+)
+check(
+  '脸正好铺满格子（严格按比例算）',
+  covers.every((cell) => Math.abs((cell.renderedW ?? 0) - (cell.expectedW ?? 0)) <= 2),
+  covers
+    .map((cell) => `${String(cell.renderedW)}≈${String(Math.round(cell.expectedW ?? 0))}`)
+    .join(' '),
+)
+check(
+  '缩略图没被拉伸变形（保持原始宽高比）',
+  covers.every(
+    (cell) =>
+      Math.abs(
+        (cell.renderedW ?? 0) / (cell.renderedH ?? 1) - (cell.natural ?? 1) / (cell.naturalH ?? 1),
+      ) < 0.02,
+  ),
+  `${String(covers[0]?.renderedW)}×${String(covers[0]?.renderedH)} / natural ${String(covers[0]?.natural)}×${String(covers[0]?.naturalH)}`,
+)
+check(
+  '裁切区有内容（不是一片纯色）',
+  covers.every((cell) => (cell.stddev ?? 0) >= 15),
+  covers.map((cell) => (cell.stddev ?? 0).toFixed(1)).join(' '),
+)
+
 // ——— 4. 带标签的正确性检查：人脸 → 照片 → 人物 ———
 // 组节点带 `data-members`（成员照片文件名），标签来自语料 manifest。
 //

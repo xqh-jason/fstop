@@ -123,29 +123,33 @@ async function split(cluster: ClusterRow): Promise<void> {
   selected.value = next
 }
 
-/** 缩略图里按人脸框定位：把整张缩略图放大到只露出人脸那一块 */
+/**
+ * 缩略图里按人脸框定位：把整张缩略图放大到只露出人脸那一块。
+ *
+ * **全部用无单位比例，交给 CSS calc 去乘容器尺寸**（实测踩过的坑）：早先这里是
+ * 「原图像素 × 放大倍数」的绝对 px（`width: ${原图宽 × 倍数}px`），倍数按原图算、却作用在
+ * **320 px 的缩略图**上 —— 倍数大了约 12.5 倍，64 px 的格子只看到脸上一小块皮肤，
+ * 显示出来是一片纯色。比例与容器无关，算式里就不该出现绝对像素。
+ *
+ * - `--k`：人脸框相对尺寸里较大的那个（宽/高各占原图的比例），决定放大到「哪条边贴住格子」
+ * - `--wr/--hr/--xr/--yr`：人脸框的宽/高/左边/上边占原图的比例
+ * - `--ar`：原图高/宽，用来把「图片高度」换算成以格子高度为单位（格子是方的，两边同尺度）
+ */
 function faceStyle(face: FaceRow): Record<string, string> {
   const width = face.width ?? 0
   const height = face.height ?? 0
-  if (width <= 0 || height <= 0) return {}
+  const boxWidth = face.x2 - face.x1
+  const boxHeight = face.y2 - face.y1
+  if (width <= 0 || height <= 0 || boxWidth <= 0 || boxHeight <= 0) return {}
+  const wr = boxWidth / width
+  const hr = boxHeight / height
   return {
-    '--face-w': `${String(((face.x2 - face.x1) / width) * 100)}%`,
-    '--face-h': `${String(((face.y2 - face.y1) / height) * 100)}%`,
-    '--face-x': `${String((face.x1 / width) * 100)}%`,
-    '--face-y': `${String((face.y1 / height) * 100)}%`,
-  }
-}
-
-function thumbStyle(face: FaceRow): Record<string, string> {
-  const width = face.width ?? 0
-  const height = face.height ?? 0
-  if (width <= 0 || height <= 0) return { visibility: 'hidden' }
-  const scale = Math.max(width / (face.x2 - face.x1), height / (face.y2 - face.y1))
-  return {
-    width: `${String(width * scale)}px`,
-    height: `${String(height * scale)}px`,
-    left: `${String(-face.x1 * scale)}px`,
-    top: `${String(-face.y1 * scale)}px`,
+    '--k': String(Math.max(wr, hr)),
+    '--wr': String(wr),
+    '--hr': String(hr),
+    '--xr': String(face.x1 / width),
+    '--yr': String(face.y1 / height),
+    '--ar': String(height / width),
   }
 }
 
@@ -205,7 +209,6 @@ function nameOf(cluster: ClusterRow): string {
                 <img
                   v-if="thumbUrls[coverOf(cluster)!.thumbKey ?? ''] !== undefined"
                   :src="thumbUrls[coverOf(cluster)!.thumbKey ?? '']"
-                  :style="thumbStyle(coverOf(cluster)!)"
                   alt=""
                 />
               </span>
@@ -269,7 +272,6 @@ function nameOf(cluster: ClusterRow): string {
                   <img
                     v-if="thumbUrls[face.thumbKey ?? ''] !== undefined"
                     :src="thumbUrls[face.thumbKey ?? '']"
-                    :style="thumbStyle(face)"
                     alt=""
                   />
                 </span>
@@ -297,7 +299,6 @@ function nameOf(cluster: ClusterRow): string {
               <img
                 v-if="thumbUrls[face.thumbKey ?? ''] !== undefined"
                 :src="thumbUrls[face.thumbKey ?? '']"
-                :style="thumbStyle(face)"
                 alt=""
               />
             </span>
@@ -451,6 +452,14 @@ function nameOf(cluster: ClusterRow): string {
 .face-crop img {
   position: absolute;
   max-width: none;
+  /* 让人脸框正好铺满格子，多出来的方向居中（全部用比例算，与容器尺寸无关） */
+  width: calc(100% / var(--k, 1));
+  height: auto;
+  left: calc(-100% * var(--xr, 0) / var(--k, 1) + (100% - 100% * var(--wr, 1) / var(--k, 1)) / 2);
+  top: calc(
+    -100% * var(--yr, 0) / var(--k, 1) * var(--ar, 1) + (100% - 100% * var(--hr, 1) / var(--k, 1)) /
+      2
+  );
 }
 
 .face__path {

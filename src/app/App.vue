@@ -154,6 +154,8 @@ let thumbsDir: FileSystemDirectoryHandle | null = null
 let source: PhotoSource | null = null
 /** 内置样例模式：UI 上要如实说明「你正在看的是内置样例，不是你的照片」 */
 const samplesMode = ref(false)
+/** 人物面板专用的人脸缩略图表（与照片墙的 `thumbs` 分开，理由见 refreshFaceThumbs） */
+const faceThumbs = ref<Record<string, string>>({})
 /** 当前生效的 rootId —— 不同来源不同根，别再各处重算（人脸流水线也曾算错一次） */
 const SAMPLES_ROOT_KEY = 'bundled-samples'
 function currentRootId(): string {
@@ -358,21 +360,27 @@ function centroidFrom(rows: readonly Float32Array[]): Float32Array {
   return normalizeVector(sum)
 }
 
-/** 人物面板里的脸裁切要用缩略图；补上人脸引用到但还没读出来的那些 */
+/**
+ * 人物面板里的人脸裁切要用缩略图。
+ *
+ * **必须和照片墙/检索结果分开一张表**（实测踩过）：两者周期间完全不重叠 ——
+ * 检索结果每次搜索都在换，人脸封面则相对稳定。早先共用一张 `thumbs`，而
+ * `refreshThumbMap()` 每次都**用一个新对象整体替换**它（只放当前命中的 key），
+ * 于是刚加进去的人脸 key 会被下一次检索/索引顺手冲掉，人物面板就剩下一片空白格子。
+ * 一个 map 两个写者、还带替换语义，必然互相清空；分开之后谁也不动谁。
+ */
 async function refreshFaceThumbs(): Promise<void> {
   if (thumbsDir === null) return
-  const next = { ...thumbs.value }
-  let changed = false
+  const next: Record<string, string> = {}
   for (const face of faces.value) {
     const key = face.thumbKey
     if (key === null || next[key] !== undefined) continue
     const blob = await readOpfsFile(thumbsDir, key)
-    if (blob !== null) {
-      next[key] = URL.createObjectURL(blob)
-      changed = true
-    }
+    if (blob !== null) next[key] = URL.createObjectURL(blob)
   }
-  if (changed) thumbs.value = next
+  // 旧 URL 要显式撤销：重跑人脸识别会换一批 key，不撤就是泄（照片墙那份也一样）
+  for (const url of Object.values(faceThumbs.value)) URL.revokeObjectURL(url)
+  faceThumbs.value = next
 }
 
 async function boot(): Promise<void> {
@@ -643,7 +651,7 @@ async function refreshThumbMap(only?: readonly SearchHit[]): Promise<void> {
     <PeoplePanel
       :faces="faces"
       :clusters="clusters"
-      :thumb-urls="thumbs"
+      :thumb-urls="faceThumbs"
       :ran="faceRan"
       :status="faceStatus"
       :busy="facing"
